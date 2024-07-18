@@ -10,3 +10,4 @@ scikit-learn==1.3.2
 scipy=1.10.1
 cupy-cuda12x
 pip install optuna
+pip install numba
