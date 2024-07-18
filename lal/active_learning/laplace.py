@@ -1,45 +1,46 @@
-import torch
 import numpy as np
 import scipy
 
-def laplace_w(queries, latent_dim, num_w_samples, seed=0):
+def laplace_w(traj_embeds, feedback_embeds, latent_dim, num_w_samples):
     '''
     This is the Laplace Approximation method, approximating the reward weight space as a gaussian, and then direct sampling from the approximation.
     parameters:
         queries (type list): the list of all query feedbacks provided by the user
         latent_dim (type int): the dimension of the latent space of the embeddings
         num_w_samples (type int): the number of l's that are sampled
-        seed (type int): the random seed
     returns:
         w_samples (type torch.tensor): the set of w samples
     '''
     def logp(i, w):
-        traj_embed = queries[i][0]
-        feedback_embed = queries[i][1]
-        # return torch.log(1 / (1 + torch.exp(-(w @ feedback_embed))))
-        return (feedback_embed @ (torch.tensor(w) - traj_embed).to(torch.float)).item() # new model propto BT model using cosine similarity
-
+        feedback_embed = feedback_embeds[i].reshape(1, 512)
+        diff = (w - traj_embeds[i]).reshape(512, 1)
+        return np.dot(feedback_embed, diff).item() # new model propto BT model using cosine similarity
+	
     def logprob(w):
-        # if w.norm(2) > 1: return -np.inf
         if np.linalg.norm(w) > 1: return -100
-        return np.sum([logp(i, w) for i in range(len(queries))])
+        log_prob = np.float32(0.)
+        for i in range(traj_embeds.shape[0]-1): 
+            log_prob += logp(i, w)
+        return log_prob
 
     def neg_logprob(w):
         return -logprob(w)
 
-    solution = scipy.optimize.minimize(neg_logprob, np.zeros(latent_dim), options={"maxiter":10}) # optimize using initial guess
-    mode = torch.tensor(solution.x, dtype=torch.float)
-    mode /= torch.norm(mode) # normalize the mode
-    inv_hess = torch.tensor(solution.hess_inv)
-    normalized_inv_hess = inv_hess*1e-10
-    lambs = torch.norm(normalized_inv_hess) # L2 regularization
-    identity = torch.eye(latent_dim)
-    normalized_inv_hess += lambs * identity
-    covariance = normalized_inv_hess.to(torch.float)
-    w_samples = torch.distributions.MultivariateNormal(torch.nan_to_num(mode), torch.nan_to_num(covariance)).sample((num_w_samples,))
+    def constraint_function(w):
+        return 1 - np.linalg.norm(w)
+
+    constraints = {'type': 'ineq', 'fun': constraint_function}
+    solution = scipy.optimize.minimize(neg_logprob, np.zeros(latent_dim), method='SLSQP', constraints=constraints) # optimize using SLSQP to get the true mode
+    solution = scipy.optimize.minimize(neg_logprob, solution.x, method='L-BFGS-B', options={"maxiter":10}) # optimize using L-BFGS-B to get the approx hessian
+    ##https://github.com/rickecon/StructEst_W17/issues/26
+    mode = solution.x / np.maximum(np.linalg.norm(solution.x), 1e-8)
+    inv_hess = solution.hess_inv.todense() * 1e-10
+    lambs = np.linalg.norm(inv_hess) # L2 regularization
+    inv_hess += lambs * np.eye(latent_dim)
+    w_samples = np.random.multivariate_normal(np.nan_to_num(mode), np.nan_to_num(inv_hess), size=num_w_samples)
     return w_samples
 
-def laplace_l(queries, w, latent_dim, num_l_samples, seed=0):
+def laplace_l(traj_embeds, w, latent_dim, num_l_samples):
     '''
     This is the Laplace Approximation method, approximating the embedding space as a gaussian, and then direct sampling from the approximation.
     parameters:
@@ -47,48 +48,53 @@ def laplace_l(queries, w, latent_dim, num_l_samples, seed=0):
         w (type torch.tensor): the sampled reward model weights that is needed to then sample language
         latent_dim (type int): the dimension of the latent space of the embeddings
         num_l_samples (type int): the number of l's that are sampled
-        seed (type int): the random seed
     returns:
         l_samples (type torch.tensor): the set of l samples
     '''
     def logp(i, l):
-        traj_embed = queries[i][0]
-        return (torch.tensor(l).to(torch.float) @ (w - traj_embed)).item() # new model propto BT model using cosine similarity
-	
+        diff = (w - traj_embeds[i]).reshape(512, 1).astype(np.float32)
+        return np.dot(l.reshape(1, 512), diff).item() # new model propto BT model using cosine similarity
+
     def logprob(l):
-        # if l.norm(2) > 1: return -np.inf
         if np.linalg.norm(l) > 1: return -100
-        return np.sum([logp(i, l) for i in range(len(queries))])
+        log_prob = np.float32(0.)
+        for i in range(traj_embeds.shape[0]-1): 
+            log_prob += logp(i, l)
+        return log_prob
 
     def neg_logprob(l):
         return -logprob(l)
 
-    solution = scipy.optimize.minimize(neg_logprob, np.zeros(latent_dim), options={"maxiter":10}) # optimize using initial guess
-    mode = torch.tensor(solution.x, dtype=torch.float)
-    mode /= torch.norm(mode) # normalize the mode
-    inv_hess = torch.tensor(solution.hess_inv)
-    normalized_inv_hess = inv_hess*1e-10
-    lambs = torch.norm(normalized_inv_hess) # L2 regularization
-    identity = torch.eye(latent_dim)
-    normalized_inv_hess += lambs * identity
-    covariance = normalized_inv_hess.to(torch.float)
-    l_samples = torch.distributions.MultivariateNormal(torch.nan_to_num(mode), torch.nan_to_num(covariance)).sample((num_l_samples,))
+    def constraint_function(l):
+        return 1 - np.linalg.norm(l)
+
+    constraints = {'type': 'ineq', 'fun': constraint_function}
+    solution = scipy.optimize.minimize(neg_logprob, np.zeros(latent_dim), method='SLSQP', constraints=constraints) # optimize using SLSQP to get the true mode
+    solution = scipy.optimize.minimize(neg_logprob, solution.x, method='L-BFGS-B', options={"maxiter":10}) # optimize using L-BFGS-B to get the approx hessian
+    mode = solution.x / np.linalg.norm(solution.x)
+    inv_hess = solution.hess_inv.todense() * 1e-10
+    lambs = np.linalg.norm(inv_hess) # L2 regularization
+    inv_hess += lambs * np.eye(latent_dim)
+    l_samples = np.random.multivariate_normal(np.nan_to_num(mode), np.nan_to_num(inv_hess), size=num_l_samples)
     return l_samples
 
 if __name__ == "__main__":
     import time
     latent_dim = 512
-    prev_w = torch.randn(latent_dim)
-    prev_w /= torch.norm(prev_w)
-    prev_w /= torch.norm(prev_w) # do it twice to ensure norm is less than 1
-    traj_embed = torch.randn(100, latent_dim)
-    traj_embed /= torch.norm(traj_embed)
-    feedback_embed = torch.randn(100, latent_dim)
-    feedback_embed /= torch.norm(feedback_embed)
-    queries = [[traj_embed[i], feedback_embed[i]] for i in range(10)]
+    prev_w = np.random.randn(latent_dim).astype(np.float32)
+    prev_w /= np.linalg.norm(prev_w)
+    prev_w /= np.linalg.norm(prev_w) # do it twice to ensure norm is less than 1
+    prev_w1 = prev_w.copy()
+    prev_w2 = prev_w.copy()
+    traj_embeds = np.random.randn(100, latent_dim)
+    traj_embeds /= np.linalg.norm(traj_embeds)
+    feedback_embeds = np.random.randn(100, latent_dim)
+    feedback_embeds /= np.linalg.norm(feedback_embeds)
+    num_w_samples=100
+    num_l_samples=100
     start_time = time.time()
-    w = laplace_w(queries, latent_dim, 100)[50]
-    # print(time.time() - start_time) # 2 seconds using 10 iterations for minimizing; 21.9 seconds for 21 iterations
+    w_samples = laplace_w(traj_embeds, feedback_embeds, latent_dim, num_w_samples)
+    print(time.time() - start_time) # 2 seconds using 10 iterations for minimizing; 21.9 seconds for 21 iterations
     start_time = time.time()
-    l = laplace_l(queries, w, latent_dim, 10)
-    # print(time.time() - start_time) # 12 seconds using 16 iterations
+    l_samples = laplace_l(traj_embeds, w_samples[50], latent_dim, num_l_samples)
+    print(time.time() - start_time) # 12 seconds using 16 iterations
