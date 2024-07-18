@@ -14,7 +14,7 @@ def next_traj_method(traj_embeds=None, lang_embeds=None, initial_w=None, active=
     # sampling from embedding space and reward space
     if active == 1:
         assert traj_embeds is not None and lang_embeds is not None
-        next_traj_iter = OpenIter(traj_embeds, lang_embeds, reward, lang, initial_w)
+        next_traj_iter = OpenIter(traj_embeds, lang_embeds, reward, lang, torch.zeros(512))
 
     # sample from llm and reward space
     elif active == 2:
@@ -52,7 +52,7 @@ class OpenIter:
         # self.w_M = 10
         # self.l_M_start = 100
         # self.l_M_end = 20
-        self.queries = []
+        self.queries = [0]
         self.initial_w = initial_w
 
     def feed(self, curr_traj_embed, feedback_embed, pos):
@@ -63,7 +63,7 @@ class OpenIter:
             feedback_embed (type np.array): Embedding of the feedback given
             pos (type bool): Whether or not feedback is positive or negative
         '''
-        self.queries.append([curr_traj_embed, feedback_embed, pos])
+        self.queries.append([curr_traj_embed.numpy(), feedback_embed.numpy(), pos])
 
     def next(self):
         '''
@@ -74,7 +74,7 @@ class OpenIter:
             ig (type float): The amount of info gained
         '''
         # start_time = time.time()
-        w_samples, l_samples = self.sampler.sample(self.queries, initial_w=self.initial_w)
+        w_samples, l_samples = self.sampler.sample(self.queries, initial_w=self.initial_w.numpy())
         # print(f"Sampling took: {time.time() - start_time} seconds")
         # self.initial_w = w_samples[-1]
         self.initial_w = torch.mean(w_samples, dim=0)
@@ -138,10 +138,9 @@ class DatasetIter:
         self.traj_embeds = traj_embeds
         self.lang_embeds = lang_embeds
         self.dim = self.traj_embeds[-1].shape[0]
-        self.sampler = WeightSampler(dim, reward=reward)
-        self.w_M = 10
+        self.sampler = WeightSampler(self.dim, reward=reward)
         self.l_M_start = 100
-        self.l_M_end = 20
+        self.l_M_end = 10
         self.queries = []
         self.initial_w = initial_w
 
@@ -161,20 +160,22 @@ class DatasetIter:
             idx (type int): An int that contains the idx of the trajectory we want to show
         '''
         w_samples, _ = self.sampler.sample(self.queries, initial_w=self.initial_w)
-        self.initial_w = w_samples[-1]
+        # self.initial_w = w_samples[-1]
+        self.initial_w = torch.mean(w_samples, dim=0)
         l_samples = []
-        for i in range(self.w_M):
+        for i in range(len(w_samples)):
             curr_w = w_samples[i]
 
-            l_idxs = np.random.choice(self.dim, size=self.l_M_start, replace=False)
+            l_idxs = np.random.choice(len(self.lang_embeds), size=self.l_M_start, replace=False)
             pre_l_samples = self.lang_embeds[l_idxs]
 
-            unnormalized_p = pre_l_samples @ curr_w
+            unnormalized_p = pre_l_samples @ curr_w # is this fine? or should we be doing l(w-t); maybe this is fine
             normalized_p = pre_l_samples / torch.norm(pre_l_samples)
 
             new_l_idxs = np.random.choice(l_idxs, size=self.l_M_end, replace=False, p=normalized_p)
             post_l_samples = self.lang_embeds[new_l_idxs]
             l_samples.append(post_l_samples)
+        l_samples = np.stack(l_samples)
         idx, ig = info(w_samples, l_samples, self.traj_embeds)
         return w_samples, idx, ig
 
@@ -188,9 +189,8 @@ class RandomIter:
             traj_embeds (type np.array): Contains the trajectory embedding, a float vector size 512
         '''
         self.traj_embeds = traj_embeds
-        # self.lang_embeds = lang_embeds
         self.dim = self.traj_embeds[-1].shape[0]
-        self.sampler = WeightSampler(dim, reward=reward)
+        self.sampler = WeightSampler(self.dim, reward=reward)
         self.queries = []
         self.initial_w = initial_w
 
@@ -198,18 +198,22 @@ class RandomIter:
         '''
         Every time a human feedback is given from a query, add the results to our list
         parameters:
-        	queries (type list): the list of all query feedbacks provided by the user
+        	curr_traj_embed (type np.array): Embedding of the current trajectory
+            feedback_embed (type np.array): Embedding of the feedback given
+            pos (type bool): Whether or not feedback is positive or negative
         '''
         self.queries.append([curr_traj_embed, feedback_embed, pos])
 
     def next(self):
         '''
-        Sample w and l, perform info gain to get next trajectory idx
+        Sample w, randomly select next trajectory idx
         returns:
 			w_samples (type np.array): The sampled reward weight vectors, size 512 for t5-small
             idx (type int): An int that contains the idx of the trajectory we want to show
+            np.inf (type int): Placeholder for info gain score
         '''
-        w_samples, _ = self.sampler.sample(self.queries, initial_w=self.initial_w)
-        self.initial_w = w_samples[-1]
-        idx = np.random.choice(self.dim, size=1, replace=False)
-        return w_samples, idx, _
+        w_samples = self.sampler.sample(self.queries, initial_w=self.initial_w)
+        # self.initial_w = w_samples[-1]
+        self.initial_w = torch.mean(w_samples, dim=0)
+        idx = np.random.choice(len(self.traj_embeds), size=1)[0]
+        return w_samples, idx, np.inf
