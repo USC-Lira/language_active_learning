@@ -14,20 +14,21 @@ def info(w_samples, l_samples, traj_embeds):
 	'''
 	M = w_samples.shape[0] # w/ shape (M, dim)
 	dim = w_samples.shape[1]
-	Q = l_samples.shape[1] # w/ shape (M, Q, dim)
+	K = l_samples.shape[1] # w/ shape (M, K, dim)
 	T = traj_embeds.shape[0] # (T, dim)
 
 	# embed_diff = (w_samples.unsqueeze(1) - traj_embeds.unsqueeze(0)).reshape(M, T, dim) # shape (M, T, dim)
-	# align = torch.einsum('mtd,mqd->mtq', embed_diff, l_samples) # shape (M, T, Q) # it shouldn't be (M, T, Q) bc this only allows l's to multiply w/ the w it was sampled from, but not w/ other w's
-	# numerator = torch.exp(torch.transpose(align, 0, 1)) # shape (T, M, Q)
+	# align = torch.einsum('mtd,mqd->mtq', embed_diff, l_samples) # shape (M, T, K) # it shouldn't be (M, T, K) bc this only allows l's to multiply w/ the w it was sampled from, but not w/ other w's
+	# numerator = torch.exp(torch.transpose(align, 0, 1)) # shape (T, M, K)
 
 	embed_diff = (w_samples.unsqueeze(1) - traj_embeds.unsqueeze(0)).reshape(M*T, dim) # shape (M*T, dim)
-	align = embed_diff @ l_samples.reshape(M*Q, dim).T # shape (M*T, M*Q)
-	probs = align.reshape(M, T, -1).transpose(0, 1) # shape (T, M, M*Q), so: (trajectory, weight, language)
-	probs /= torch.sum(probs, dim=-1).unsqueeze(-1) # shape (T, M, M*Q)
-	eps = 1e-8
-	tmp = torch.nn.functional.relu(M * probs / torch.sum(probs, dim=1).unsqueeze(1)) + eps
-	f_values = torch.sum(torch.sum(torch.log2(tmp), dim=2), dim=1) / (M*Q) # shape (T)
+	align = embed_diff @ l_samples.reshape(M*K, dim).T # shape (M*T, M*K)
+	probs = np.maximum(align.reshape(M, T, -1).transpose(0, 1), 1e-8) # shape (T, M, M*K), so: (trajectory, weight, language)
+	# probs += torch.abs(torch.min(probs, dim=-1)[0].reshape(T, M, 1)) # normalize values to make everything positive
+	probs /= torch.sum(probs, dim=-1).unsqueeze(-1) # shape (T, M, M*K)
+	# tmp = torch.nn.functional.relu(M * probs / torch.sum(probs, dim=1).unsqueeze(1)) + eps
+	tmp = M * probs / torch.sum(probs, dim=1).unsqueeze(1)
+	f_values = torch.sum(torch.sum(torch.log2(tmp), dim=2), dim=1) / (M*K) # shape (T)
 	
 	idx = torch.argmax(f_values) # easy code uses argmin but also divides by negative M for some reason
 	ig = torch.abs(torch.nan_to_num(f_values[idx], nan=1))

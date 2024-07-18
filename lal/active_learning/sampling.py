@@ -3,7 +3,7 @@ import numpy as np
 from lal.active_learning.mh import mh_w, mh_l
 from lal.active_learning.gibbs import gibbs_w, gibbs_l
 from lal.active_learning.laplace import laplace_w, laplace_l
-from lal.active_learning.ep import ep_w, ep_l
+from lal.active_learning.ep import ep_w, ep_l, ep_w_dimension
 import time
 from concurrent.futures import ProcessPoolExecutor
 
@@ -26,7 +26,7 @@ class EmbeddingSampler:
 		if reward == 1: self.w_sampler = mh_w
 		elif reward == 2: self.w_sampler = gibbs_w
 		elif reward == 3: self.w_sampler = laplace_w
-		elif reward == 4: self.w_sampler = ep_w
+		elif reward == 4: self.w_sampler = ep_w_dimension
 		assert self.w_sampler is not None
 		
 		self.lang = lang
@@ -37,8 +37,10 @@ class EmbeddingSampler:
 		elif lang == 4: self.l_sampler = ep_l
 		assert self.l_sampler is not None
 	
-	def sample(self, queries, initial_w=None, num_w_samples=100, burn_in_w=1000, thin_w=50, num_l_samples_per_w=10, burn_in_l=100, thin_l=5, seed=0):
-	# def sample(self, queries, initial_w=None, num_w_samples=10, burn_in_w=10, thin_w=10, num_l_samples_per_w=5, burn_in_l=10, thin_l=10, seed=0): # for bug-testing purposes
+	# def sample(self, queries, initial_w=None, num_w_samples=1000, burn_in_w=10000, thin_w=500, num_l_samples_per_w=10, burn_in_l=100, thin_l=5, seed=0): # 1-1
+	# def sample(self, queries, initial_w=None, num_w_samples=100, burn_in_w=1000, thin_w=50, num_l_samples_per_w=10, burn_in_l=100, thin_l=5, seed=0): # 2-1
+	# def sample(self, queries, initial_w=None, num_w_samples=100, burn_in_w=100, thin_w=5, num_l_samples_per_w=100, burn_in_l=100, thin_l=5, seed=0): # 3-1
+	def sample(self, queries, initial_w=None, num_w_samples=100, burn_in_w=100, thin_w=5, num_l_samples_per_w=100, burn_in_l=100, thin_l=5, seed=0): # 4-1
 		'''
 		Using parallelization, sample from reward weight space
 		parameters:
@@ -56,51 +58,52 @@ class EmbeddingSampler:
 		w_samples = []
 		l_samples = []
 
-		if self.reward <= 2 and self.lang == 1: # MC-MH
+		traj_embeds = np.zeros((1, 512))
+		feedback_embeds = np.zeros((1, 512))
+		if len(queries) > 1:
+			traj_embeds = []
+			feedback_embeds = []
+			for i in range(1, len(queries)):
+				traj_embeds.append(queries[i][0])
+				feedback_embeds.append(queries[i][1])
+			traj_embeds = np.stack(traj_embeds)
+			feedback_embeds = np.stack(feedback_embeds)
+		if self.reward <= 2 and self.lang <= 2: # MC-MC
 			prev_w = initial_w
 			for i in range(num_w_samples * thin_w + burn_in_w):
-				w = self.w_sampler(queries, self.dim, prev_w, seed=seed) # do one step in mcmc to sample w
+				w = self.w_sampler(traj_embeds, feedback_embeds, self.dim, prev_w) # do one step in mcmc to sample w
 				prev_w = w
 				if i >= burn_in_w and i % thin_w == 0:
 					w_samples.append(w)
-					l_samples.append(self.l_sampler(queries, w, self.dim, num_l_samples_per_w * thin_l + burn_in_l, burn_in=burn_in_l, thin=thin_l, seed=seed + i))
-		
-		elif self.reward <= 2 and self.lang == 2: # MC-Gibbs
-			with ProcessPoolExecutor() as executor: # parallelize the l sampling
-				prev_w = initial_w # might need to parallelize this one
-				for i in range(num_w_samples * thin_w + burn_in_w):
-					w = self.w_sampler(queries, self.dim, prev_w, seed=seed) # do one step in mcmc to sample w
-					prev_w = w
-					if i >= burn_in_w and i % thin_w == 0:
-						w_samples.append(w)
-						future = executor.submit(self.l_sampler, queries, w, self.dim, num_l_samples_per_w * thin_l + burn_in_l, burn_in=burn_in_l, thin=thin_l, seed=seed + i)
-						l_samples.append(future.result())
+					l_samples.append(self.l_sampler(traj_embeds, w, self.dim, num_l_samples_per_w * thin_l + burn_in_l, burn_in=burn_in_l, thin=thin_l))
 
 		elif self.reward <= 2: # MC-Sampling
 			prev_w = initial_w # might need to parallelize this one
 			for i in range(num_w_samples * thin_w + burn_in_w):
-				w = self.w_sampler(queries, self.dim, prev_w, seed=seed) # do one step in mcmc to sample w
+				w = self.w_sampler(traj_embeds, feedback_embeds, self.dim, prev_w) # do one step in mcmc to sample w
 				prev_w = w
 				if i >= burn_in_w and i % thin_w == 0:
 					w_samples.append(w)
-					l_samples.append(self.l_sampler(queries, w, self.dim, num_l_samples_per_w, seed=seed + i))
+					l_samples.append(self.l_sampler(traj_embeds, w, self.dim, num_l_samples_per_w))
 
 		elif self.reward >= 3 and self.lang <= 2: # Sampling-MC
-			w_samples = self.w_sampler(queries, self.dim, num_w_samples, seed=seed) #  approx the distribution into gaussian, and sample from using torch
-			with ProcessPoolExecutor() as executor: # parallelize the l sampling (if needed)
-				for i in range(num_w_samples):
-					future = executor.submit(self.l_sampler, queries, w_samples[i], self.dim, num_l_samples_per_w * thin_l + burn_in_l, burn_in=burn_in_l, thin=thin_l, seed=seed + i)
-					l_samples.append(future.result())
-
+			w_samples = self.w_sampler(traj_embeds, feedback_embeds, self.dim, num_w_samples).astype(np.float32) #  approx the distribution into gaussian, and sample from using torch
+			# with ProcessPoolExecutor() as executor: # parallelize the l sampling (if needed)
+			for i in range(num_w_samples):
+				# future = executor.submit(self.l_sampler, traj_embeds, w_samples[i], self.dim, num_l_samples_per_w * thin_l + burn_in_l, burn_in=burn_in_l, thin=thin_l)
+				# l_samples.append(future.result())
+				l_samples.append(self.l_sampler(traj_embeds, w_samples[i], self.dim, num_l_samples_per_w * thin_l + burn_in_l, burn_in=burn_in_l, thin=thin_l))
 		else: # Sampling-Sampling
-			w_samples = self.w_sampler(queries, self.dim, num_w_samples, seed=seed) #  approx the distribution into gaussian, and sample from using torch
+			w_samples = self.w_sampler(traj_embeds, feedback_embeds, self.dim, num_w_samples) #  approx the distribution into gaussian, and sample from using torch
 			with ProcessPoolExecutor() as executor: # parallelize the l sampling (if needed)
 				for i in range(num_w_samples):
-					future = executor.submit(self.l_sampler, queries, w_samples[i], self.dim, num_l_samples_per_w, seed=seed + i)
+					future = executor.submit(self.l_sampler, traj_embeds, w_samples[i], self.dim, num_l_samples_per_w)
 					l_samples.append(future.result())
 		
-		if self.reward <= 2: w_samples = torch.stack(w_samples)
-		l_samples = torch.stack(l_samples)
+		if self.reward <= 2: w_samples = torch.from_numpy(np.stack(w_samples))
+		else: w_samples = torch.from_numpy(w_samples)
+		if self.lang <= 2: l_samples = torch.from_numpy(np.stack(l_samples))
+		else: l_samples = torch.from_numpy(l_samples)
 		return w_samples, l_samples
 
 class WeightSampler:
@@ -124,7 +127,7 @@ class WeightSampler:
 		elif reward == 4: self.w_sampler = ep_w
 		assert self.w_sampler is not None
 
-	def sample(self, queries, initial_w=None, num_w_samples=100, num_l_samples_per_w=None, burn_in=50, thin=50, seed=0):
+	def sample(self, queries, initial_w=None, num_w_samples=100, burn_in=1000, thin=50, seed=0):
 		'''
 		Sample from reward weight space. No parallelization is needed (albeit it's possible for laplace and ep after estimating the distribution)
 		parameters:
@@ -139,19 +142,17 @@ class WeightSampler:
 			np.array([]) (type np.array): Return an empty list to have the same return criteria as BothSampler()
 		'''
 		w_samples = []
-	
-		if self.reward >= 3: # w is sampled using approximation
-			w_samples = self.w_sampler(queries, self.dim, num_w_samples, seed=seed) #  approx the distribution into gaussian, and sample from using torch
-		elif self.reward <= 2: # w is sampled using mcmc
+
+		if self.reward <= 2: # MC-MH
 			prev_w = initial_w
-			for i in range(num_w_samples):
-				w = self.w_sampler(queries, self.dim, prev_w, burn_in=burn_in, thin=thin, seed=seed) # do one step in mcmc to sample w
+			for i in range(num_w_samples * thin_w + burn_in_w):
+				w = self.w_sampler(queries, self.dim, prev_w) # do one step in mcmc to sample w
 				prev_w = w
-				if (i + burn) % thin == 0:
+				if i >= burn_in_w and i % thin_w == 0:
 					w_samples.append(w)
 
-		if self.reward >= 3:
-			w_samples = self.w_sampler(num_w_samples, seed, self.queries)
-		elif self.reward <= 2:
-			w_samples = self.w_sampler(num_w_samples, seed, self.queries, self.initial)
-		return w_samples, np.array([])
+		elif self.reward >= 3 and self.lang <= 2: # Sampling-MC
+			w_samples = self.w_sampler(queries, self.dim, num_w_samples) #  approx the distribution into gaussian, and sample from using torch
+		
+		if self.reward <= 2: w_samples = torch.stack(w_samples)
+		return w_samples
