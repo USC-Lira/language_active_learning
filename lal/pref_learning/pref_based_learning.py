@@ -13,12 +13,12 @@ import matplotlib.pyplot as plt
 
 from transformers import AutoModel, AutoTokenizer, T5EncoderModel
 
-from lang_pref_learning.model.encoder import NLTrajAutoencoder
-from lang_pref_learning.pref_learning.pref_dataset import LangPrefDataset, CompPrefDataset, EvalDataset
-from lang_pref_learning.pref_learning.utils import feature_aspects
-from lang_pref_learning.feature_learning.utils import LANG_MODEL_NAME, LANG_OUTPUT_DIM, AverageMeter
-from lang_pref_learning.model_analysis.utils import get_traj_lang_embeds
-from lang_pref_learning.model_analysis.improve_trajectory import (
+from lal.model.encoder import NLTrajAutoencoder
+from lal.pref_learning.pref_dataset import LangPrefDataset, CompPrefDataset, EvalDataset
+from lal.pref_learning.utils import rs_feature_aspects, mw_feature_aspects
+from lal.feature_learning.utils import LANG_MODEL_NAME, LANG_OUTPUT_DIM, AverageMeter
+from lal.model_analysis.utils import get_traj_lang_embeds
+from lal.model_analysis.improve_trajectory import (
     initialize_reward,
     get_feature_value,
     get_lang_feedback,
@@ -27,7 +27,7 @@ from lang_pref_learning.model_analysis.improve_trajectory import (
 from data.utils import gt_reward, speed, height, distance_to_cube, distance_to_bottle
 from data.utils import RS_STATE_OBS_DIM, RS_ACTION_DIM, RS_PROPRIO_STATE_DIM, RS_OBJECT_STATE_DIM
 from data.utils import WidowX_STATE_OBS_DIM, WidowX_ACTION_DIM, WidowX_PROPRIO_STATE_DIM, WidowX_OBJECT_STATE_DIM
-
+from data.utils import MW_STATE_OBS_DIM, MW_ACTION_DIM, MW_PROPRIO_STATE_DIM, MW_OBJECT_STATE_DIM
 
 # learned and true reward func (linear for now)
 def init_weights_with_norm_one(m):
@@ -163,6 +163,7 @@ def comp_pref_learning(
     test_traj_true_rewards,
     optimal_traj_feature,
     optimizer,
+    feature_aspects,
     lr_scheduler=None,
     DEBUG=False,
 ):
@@ -237,9 +238,6 @@ def comp_pref_learning(
     }
     return return_dict
 
-
-
-
 def lang_pref_learning(
     args,
     train_lang_dataloader,
@@ -257,6 +255,7 @@ def lang_pref_learning(
     test_traj_true_rewards,
     optimal_traj_feature,
     optimizer,
+    feature_aspects,
     lr_scheduler=None,
     DEBUG=False,
 ):
@@ -282,7 +281,8 @@ def lang_pref_learning(
     optimal_true_rewards.append(optimal_true_reward)
 
     for it, train_lang_data in enumerate(train_lang_dataloader):
-        if it > 100:
+        # if it > 100:
+        if it > 50:
             break
         curr_traj, curr_feature_value, idx = train_lang_data
         curr_traj_embed = traj_embeds[idx]
@@ -416,7 +416,9 @@ def evaluate(test_dataloader, true_traj_rewards, learned_reward, traj_embeds, te
         - total_cross_entropy: the average cross-entropy between the learned and true distributions
     """
     total_cross_entropy = AverageMeter("cross-entropy")
-    bce_loss = nn.BCELoss()
+    # bce_loss = nn.BCELoss()
+    # kl_div = nn.KLDivLoss(reduction="batchmean")
+    cos = nn.CosineSimilarity(dim=0, eps=1e-8)
     for i, test_data in enumerate(test_dataloader):
         traj_a, traj_b, idx_a, idx_b = test_data
 
@@ -429,21 +431,23 @@ def evaluate(test_dataloader, true_traj_rewards, learned_reward, traj_embeds, te
         # make true probs 0 and 1
         # true_probs = torch.tensor([torch.argmax(true_rewards) == 0, torch.argmax(true_rewards) == 1]).float()
         # make true probs with softmax
-        true_probs = torch.softmax(true_rewards, dim=0).float()
+        # true_probs = torch.softmax(true_rewards, dim=0).float()
 
         if test:
-            learned_probs = true_probs
+            # learned_probs = true_probs
+            learned_rewards = true_rewards
 
         else:
             traj_a_embed = torch.tensor(traj_a_embed)
             traj_b_embed = torch.tensor(traj_b_embed)
             learned_rewards = torch.tensor([learned_reward(traj_a_embed), learned_reward(traj_b_embed)])
-            learned_probs = torch.softmax(learned_rewards, dim=0)
+            # learned_probs = torch.softmax(learned_rewards, dim=0)
 
         # calculate cross-entropy between learned and true distributions
-        cross_entropy = bce_loss(learned_probs, true_probs)
+        # cross_entropy = bce_loss(learned_probs, true_probs)
         # kl_div_loss = kl_div(learned_probs.log(), true_probs)
-        total_cross_entropy.update(cross_entropy, 1)
+        cos_loss = cos(learned_rewards, true_rewards)
+        total_cross_entropy.update(cos_loss, 1)
     return total_cross_entropy.avg
 
 
@@ -488,8 +492,6 @@ def run(args):
     )
     train_classified_nlcomps = train_lang_data_dict["classified_nlcomps"]
 
-    train_feature_values = np.array([get_feature_value(traj) for traj in train_trajs])
-
     # Load test data
     test_data_dict = load_data(args, split='test')
     test_trajs = test_data_dict["trajs"]
@@ -501,7 +503,16 @@ def run(args):
     # test_greater_nlcomps, test_less_nlcomps = test_data_dict['greater_nlcomps'], test_data_dict['less_nlcomps']
     # test_classified_nlcomps = test_data_dict['classified_nlcomps']
 
-    test_feature_values = np.array([get_feature_value(traj) for traj in test_trajs])
+    if args.env == "robosuite":
+        train_feature_values = np.array([get_feature_value(traj) for traj in train_trajs])
+        test_feature_values = np.array([get_feature_value(traj) for traj in test_trajs])
+    elif args.env == "metaworld":
+        train_feature_values = np.load(f"{args.data_dir}/train/feature_vals.npy")
+        test_feature_values = np.load(f"{args.data_dir}/test/feature_vals.npy")
+        train_feature_values = np.mean(train_feature_values, axis=-1)
+        test_feature_values = np.mean(test_feature_values, axis=-1)
+        train_feature_values = train_feature_values[:, :3]
+        test_feature_values = test_feature_values[:, :3]
 
     all_features = np.concatenate([train_feature_values, test_feature_values], axis=0)
     # feature_value_mins = np.min(all_features, axis=0)
@@ -552,8 +563,10 @@ def run(args):
         PROPRIO_STATE_DIM = WidowX_PROPRIO_STATE_DIM
         OBJECT_STATE_DIM = WidowX_OBJECT_STATE_DIM
     elif args.env == "metaworld":
-        # TODO: fill in the dimensions for metaworld
-        pass
+        STATE_OBS_DIM = MW_STATE_OBS_DIM
+        ACTION_DIM = MW_ACTION_DIM
+        PROPRIO_STATE_DIM = MW_PROPRIO_STATE_DIM
+        OBJECT_STATE_DIM = MW_OBJECT_STATE_DIM
     else:
         raise ValueError("Invalid environment")
 
@@ -598,8 +611,8 @@ def run(args):
         nlcomps_bert_embeds=train_nlcomps_embed,
         use_img_obs=args.use_img_obs,
         img_obs=train_img_obs,
-        actions=train_actions
-        
+        actions=train_actions,
+        traj_encoder_type=args.traj_encoder,
     )
     test_traj_embeds, test_lang_embeds = get_traj_lang_embeds(
         test_trajs,
@@ -611,7 +624,8 @@ def run(args):
         nlcomps_bert_embeds=test_nlcomps_embed,
         use_img_obs=args.use_img_obs,
         img_obs=test_img_obs,
-        actions=test_actions
+        actions=test_actions,
+        traj_encoder_type=args.traj_encoder,
     )
 
     #     # Save the embeddings
@@ -659,10 +673,21 @@ def run(args):
     print("Test Cross Entropy:", test_ce)
 
     # Load optimal trajectory given the true reward
-    optimal_traj = np.load(f"{args.true_reward_dir}/traj.npy").reshape(500, 69)
-    optimal_traj_feature = get_feature_value(optimal_traj)
-    # Normalize the feature value
-    optimal_traj_feature = (optimal_traj_feature - feature_value_means) / feature_value_stds
+    if args.env == "robosuite":
+        optimal_traj = np.load(f"{args.true_reward_dir}/traj.npy").reshape(500, 69)
+        optimal_traj_feature = get_feature_value(optimal_traj)
+        optimal_traj_feature = (optimal_traj_feature - feature_value_means) / feature_value_stds
+        # optimal_traj_feature = test_feature_values[np.argmax(test_traj_true_rewards)]
+    elif args.env == "metaworld":
+        optimal_traj = np.load(f"{args.true_reward_dir}/traj.npy").reshape(500, 46)
+        optimal_traj_feature = np.load(args.true_reward_dir + "/traj_vals.npy")
+        optimal_traj_feature = np.mean(optimal_traj_feature, axis=-1)
+        optimal_traj_feature = optimal_traj_feature[:3]
+        optimal_traj_feature = (optimal_traj_feature - feature_value_means) / feature_value_stds
+
+    if args.env == "robosuite": feature_aspects = rs_feature_aspects
+    elif args.env == "metaworld": feature_aspects = mw_feature_aspects
+    else: raise ValueError("Invalid environment")
 
     if args.method == "comp":
         noisy_results = comp_pref_learning(
@@ -682,26 +707,7 @@ def run(args):
             test_traj_true_rewards,
             optimal_traj_feature,
             optimizer,
-        )
-
-        args.use_softmax = False
-        noiseless_results = comp_pref_learning(
-            args,
-            train_comp_data,
-            test_data,
-            model,
-            train_nlcomps,
-            train_greater_nlcomps,
-            train_less_nlcomps,
-            train_classified_nlcomps,
-            learned_reward_noiseless,
-            true_reward,
-            train_traj_embeds,
-            train_lang_embeds,
-            test_traj_embeds,
-            test_traj_true_rewards,
-            optimal_traj_feature,
-            optimizer_noiseless,
+            feature_aspects,
         )
 
     elif args.method == "lang":
@@ -722,26 +728,7 @@ def run(args):
             test_traj_true_rewards,
             optimal_traj_feature,
             optimizer,
-        )
-
-        args.use_softmax = False
-        noiseless_results = lang_pref_learning(
-            args,
-            train_lang_data,
-            test_data,
-            model,
-            train_nlcomps,
-            train_greater_nlcomps,
-            train_less_nlcomps,
-            train_classified_nlcomps,
-            learned_reward_noiseless,
-            true_reward,
-            train_traj_embeds,
-            train_lang_embeds,
-            test_traj_embeds,
-            test_traj_true_rewards,
-            optimal_traj_feature,
-            optimizer_noiseless,
+            feature_aspects,
         )
     
     else:
@@ -766,29 +753,6 @@ def run(args):
     
     # Save the results in .npz files
     save_results(args, noisy_results, postfix=postfix_noisy)
-    save_results(args, noiseless_results, postfix=postfix_noiseless)
-
-    # Plot the results
-    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(15, 5))
-    ax1.plot(noisy_results["cross_entropy"], label="Noisy")
-    ax1.plot(noiseless_results["cross_entropy"], label="Noiseless")
-    ax1.plot([0, len(noisy_results["cross_entropy"])], [test_ce, test_ce], 'k--', label='Ground Truth')
-    ax1.set_xlabel("Number of Queries")
-    ax1.set_ylabel("Cross-Entropy")
-    ax1.set_title("Feedback, True Dist: Softmax")
-    ax1.legend()
-
-    ax2.plot(noisy_results["optimal_learned_rewards"], label="Noisy, Learned Reward")
-    ax2.plot(noiseless_results["optimal_learned_rewards"], label="Noiseless, Learned Reward")
-    ax2.plot(noisy_results["optimal_true_rewards"], label="True Reward", c="r")
-    ax2.set_xlabel("Number of Queries")
-    ax2.set_ylabel("Reward Value")
-    ax2.set_title("True Reward of Optimal Trajectory")
-    ax2.legend()
-
-    plt.tight_layout()
-    plt.savefig(f"{args.true_reward_dir}/pref_learning/{args.method}_pref.png")
-    # plt.show()
 
 
 if __name__ == "__main__":
