@@ -1,8 +1,8 @@
 import numpy as np
 from numba import njit
 
-@njit
-def gibbs_w(traj_embeds, feedback_embeds, latent_dim, prev_w, k=50):
+# @njit
+def gibbs_w(traj_embeds, feedback_embeds, latent_dim, prev_w, k=50, seed=0):
     '''
     This is the Gibbs algorithm, performing to sample reward weights from the reward space. It only performs one step at a time to allow for parallelization.
     parameters:
@@ -12,6 +12,10 @@ def gibbs_w(traj_embeds, feedback_embeds, latent_dim, prev_w, k=50):
     returns:
         w (type torch.tensor): the next sampled reward weight w
     '''
+    # np.random.seed(seed)
+    traj_embeds = traj_embeds[1:]
+    feedback_embeds = feedback_embeds[1:]
+
     def logp(i, w):
         feedback_embed = feedback_embeds[i].reshape(1, 512)
         diff = (w - traj_embeds[i]).reshape(512, 1)
@@ -19,6 +23,7 @@ def gibbs_w(traj_embeds, feedback_embeds, latent_dim, prev_w, k=50):
         return np.dot(feedback_embed, diff).item() # new model propto BT model using cosine similarity
 	
     def logprob(w):
+        print(np.linalg.norm(w))
         if np.linalg.norm(w) > 1: return -np.inf
         log_prob = np.float32(0.)
         for i in range(traj_embeds.shape[0]-1): 
@@ -28,10 +33,10 @@ def gibbs_w(traj_embeds, feedback_embeds, latent_dim, prev_w, k=50):
     w = prev_w.copy()
 
     chosen = np.random.choice(np.arange(latent_dim), k, replace=False)
-    # lower_bound = -0.25 # originally had it at 1 but change to this for now
-    lower_bound = -1
-    # upper_bound = 0.25
-    upper_bound = 1
+    lower_bound = -0.2 # originally had it at 1 but change to this for now
+    # lower_bound = -1
+    upper_bound = 0.2
+    # upper_bound = 1
 
     # for i in range(latent_dim):
     for i in chosen:
@@ -49,7 +54,7 @@ def gibbs_w(traj_embeds, feedback_embeds, latent_dim, prev_w, k=50):
             w[i] = w_new[i]    
     return w
 
-@njit
+# @njit
 def gibbs_l(traj_embeds, w, latent_dim, num_l_samples, burn_in=1000, thin=50, k=20):
     '''
     This is the Gibbs algorithm, performing to sample language from embedding space.

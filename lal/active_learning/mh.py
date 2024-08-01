@@ -96,9 +96,8 @@ def mh(traj_embeds, feedback_embeds, latent_dim, prev_w, step_size=0.001, num_w_
             l_samples.append(mh_l_helper(traj_embeds, prev_w, latent_dim, num_l_samples * thin_l + burn_in_l, burn_in=burn_in_l, thin=thin_l))
     return w_samples, l_samples
 
-@njit
-def mh_w(traj_embeds, feedback_embeds, latent_dim, prev_w, step_size=0.03):
-# def mh_w(traj_embeds, feedback_embeds, latent_dim, prev_w, step_size=0.001):
+# @njit
+def mh_w(traj_embeds, feedback_embeds, latent_dim, prev_w, step_size=0.03, seed=0):
     '''
     This is the Metropolis-Hastings algorithm, performing to sample reward weights from the reward space. It only performs one step at a time to allow for parallelization.
     parameters:
@@ -111,6 +110,10 @@ def mh_w(traj_embeds, feedback_embeds, latent_dim, prev_w, step_size=0.03):
     returns:
         w (type torch.tensor): the next sampled reward weight w
     '''
+    traj_embeds = traj_embeds[1:]
+    feedback_embeds = feedback_embeds[1:]
+    
+    # np.random.seed(seed)
     def logp(i, w):
         feedback_embed = feedback_embeds[i].reshape(1, 512)
         diff = (w - traj_embeds[i]).reshape(512, 1)
@@ -136,8 +139,8 @@ def mh_w(traj_embeds, feedback_embeds, latent_dim, prev_w, step_size=0.03):
         return w_new
     return prev_w
 
-@njit
-def mh_l(traj_embeds, w, latent_dim, num_l_samples, step_size=0.03, burn_in=1000, thin=50):
+# @njit
+def mh_l(traj_embeds, w, latent_dim, num_l_samples, step_size=0.03, burn_in=1000, thin=50, seed=0):
 # def mh_l(traj_embeds, w, latent_dim, num_l_samples, step_size=0.001, burn_in=1000, thin=50):
     '''
     This is the Metropolis-Hastings algorithm, performing to sample language from embedding space.
@@ -152,6 +155,7 @@ def mh_l(traj_embeds, w, latent_dim, num_l_samples, step_size=0.03, burn_in=1000
     returns:
         torch.stack(l_samples) (type torch.tensor): the set of l samples
     '''
+    # np.random.seed(seed)
     def logp(i, l):
         diff = (w - traj_embeds[i]).reshape(512, 1).astype(np.float32)
         return np.dot(l.reshape(1, 512), diff).item() # new model propto BT model using cosine similarity
