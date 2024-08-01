@@ -4,7 +4,7 @@ from lal.active_learning.sampling import EmbeddingSampler, WeightSampler
 from lal.active_learning.info import info
 import time
 
-def next_traj_method(traj_embeds=None, lang_embeds=None, initial_w=None, active=0, reward=1, lang=1):
+def next_traj_method(traj_embeds=None, lang_embeds=None, initial_w=None, active=0, reward=1, lang=1, seed=0):
     '''
     From the correct active learning method and sampling methods, return the correct iter class
     '''
@@ -14,7 +14,7 @@ def next_traj_method(traj_embeds=None, lang_embeds=None, initial_w=None, active=
     # sampling from embedding space and reward space
     if active == 1:
         assert traj_embeds is not None and lang_embeds is not None
-        next_traj_iter = OpenIter(traj_embeds, lang_embeds, reward, lang, torch.zeros(512))
+        next_traj_iter = OpenIter(traj_embeds, lang_embeds, reward, lang, initial_w, seed)
 
     # sample from llm and reward space
     elif active == 2:
@@ -29,7 +29,7 @@ def next_traj_method(traj_embeds=None, lang_embeds=None, initial_w=None, active=
     # sample completely randomly
     else:
         assert traj_embeds is not None
-        next_traj_iter = RandomIter(traj_embeds)
+        next_traj_iter = RandomIter(traj_embeds, reward, initial_w, seed)
 
     return next_traj_iter
 
@@ -38,7 +38,7 @@ class OpenIter:
     Object that returns the next trajectory. Using information gain, select the next trajectory.
     Sample from reward space, then based on each reward space, sample from open vocabulary embedding space.
     '''
-    def __init__(self, traj_embeds, lang_embeds, reward, lang, initial_w):
+    def __init__(self, traj_embeds, lang_embeds, reward, lang, initial_w, seed):
         '''
         parameters:
             traj_embeds (type np.array): Contains the trajectory embedding, a float vector size 512
@@ -52,8 +52,9 @@ class OpenIter:
         # self.w_M = 10
         # self.l_M_start = 100
         # self.l_M_end = 20
-        self.queries = [0]
+        self.queries = []
         self.initial_w = initial_w
+        self.seed = seed
 
     def feed(self, curr_traj_embed, feedback_embed, pos):
         '''
@@ -74,7 +75,7 @@ class OpenIter:
             ig (type float): The amount of info gained
         '''
         # start_time = time.time()
-        w_samples, l_samples = self.sampler.sample(self.queries, initial_w=self.initial_w.numpy())
+        w_samples, l_samples = self.sampler.sample(self.queries, initial_w=self.initial_w.numpy(), seed=self.seed)
         # print(f"Sampling took: {time.time() - start_time} seconds")
         # self.initial_w = w_samples[-1]
         self.initial_w = torch.mean(w_samples, dim=0)
@@ -117,8 +118,9 @@ class LLMIter:
 			w_samples (type np.array): The sampled reward weight vectors, size 512 for t5-small
             idx (type int): An int that contains the idx of the trajectory we want to show
         '''
-        w_samples, _ = self.sampler.sample(self.queries, initial_w=self.initial_w)
-        self.initial_w = w_samples[-1]
+        w_samples = self.sampler.sample(self.queries, initial_w=self.initial_w.numpy(), seed=self.seed)
+        # self.initial_w = w_samples[-1]
+        self.initial_w = torch.mean(w_samples, dim=0)
         # l_samples = query LLM here
         idx, ig = info(w_samples, l_samples, self.traj_embeds)
         return w_samples, idx, ig
@@ -159,7 +161,7 @@ class DatasetIter:
 			w_samples (type np.array): The sampled reward weight vectors, size 512 for t5-small
             idx (type int): An int that contains the idx of the trajectory we want to show
         '''
-        w_samples, _ = self.sampler.sample(self.queries, initial_w=self.initial_w)
+        w_samples = self.sampler.sample(self.queries, initial_w=self.initial_w.numpy(), seed=self.seed)
         # self.initial_w = w_samples[-1]
         self.initial_w = torch.mean(w_samples, dim=0)
         l_samples = []
@@ -183,7 +185,7 @@ class RandomIter:
     '''
     Object that returns the next trajectory. Randomly get the next trajectory w/o respect to the reward model
     '''
-    def __init__(self, traj_embeds):
+    def __init__(self, traj_embeds, reward, initial_w, seed):
         '''
         parameters:
             traj_embeds (type np.array): Contains the trajectory embedding, a float vector size 512
@@ -193,6 +195,9 @@ class RandomIter:
         self.sampler = WeightSampler(self.dim, reward=reward)
         self.queries = []
         self.initial_w = initial_w
+        self.seed = seed
+        self.dataset = np.random.choice(len(self.traj_embeds), size=len(self.traj_embeds), replace=False)
+        self.counter = 0
 
     def feed(self, curr_traj_embed, feedback_embed, pos):
         '''
@@ -202,7 +207,7 @@ class RandomIter:
             feedback_embed (type np.array): Embedding of the feedback given
             pos (type bool): Whether or not feedback is positive or negative
         '''
-        self.queries.append([curr_traj_embed, feedback_embed, pos])
+        self.queries.append([curr_traj_embed.numpy(), feedback_embed.numpy(), pos])
 
     def next(self):
         '''
@@ -212,8 +217,9 @@ class RandomIter:
             idx (type int): An int that contains the idx of the trajectory we want to show
             np.inf (type int): Placeholder for info gain score
         '''
-        w_samples = self.sampler.sample(self.queries, initial_w=self.initial_w)
+        w_samples = self.sampler.sample(self.queries, initial_w=self.initial_w.numpy(), seed=self.seed)
         # self.initial_w = w_samples[-1]
         self.initial_w = torch.mean(w_samples, dim=0)
-        idx = np.random.choice(len(self.traj_embeds), size=1)[0]
+        idx = self.dataset[self.counter]
+        self.counter += 1
         return w_samples, idx, np.inf
