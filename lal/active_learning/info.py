@@ -22,7 +22,7 @@ def info(w_samples, l_samples, traj_embeds):
 	# numerator = torch.exp(torch.transpose(align, 0, 1)) # shape (T, M, K)
 
 	embed_diff = (w_samples.unsqueeze(1) - traj_embeds.unsqueeze(0)).reshape(M*T, dim) # shape (M*T, dim)
-	align = embed_diff @ l_samples.reshape(M*K, dim).T # shape (M*T, M*K)
+	align = np.exp(embed_diff @ l_samples.reshape(M*K, dim).T) # shape (M*T, M*K)
 	probs = np.maximum(align.reshape(M, T, -1).transpose(0, 1), 1e-8) # shape (T, M, M*K), so: (trajectory, weight, language)
 	# probs += torch.abs(torch.min(probs, dim=-1)[0].reshape(T, M, 1)) # normalize values to make everything positive
 	probs /= torch.sum(probs, dim=-1).unsqueeze(-1) # shape (T, M, M*K)
