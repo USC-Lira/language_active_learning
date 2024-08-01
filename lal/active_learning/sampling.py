@@ -37,10 +37,10 @@ class EmbeddingSampler:
 		elif lang == 4: self.l_sampler = ep_l
 		assert self.l_sampler is not None
 	
-	# def sample(self, queries, initial_w=None, num_w_samples=1000, burn_in_w=10000, thin_w=500, num_l_samples_per_w=10, burn_in_l=100, thin_l=5, seed=0): # 1-1
-	# def sample(self, queries, initial_w=None, num_w_samples=100, burn_in_w=1000, thin_w=50, num_l_samples_per_w=10, burn_in_l=100, thin_l=5, seed=0): # 2-1
-	# def sample(self, queries, initial_w=None, num_w_samples=100, burn_in_w=100, thin_w=5, num_l_samples_per_w=100, burn_in_l=100, thin_l=5, seed=0): # 3-1
-	def sample(self, queries, initial_w=None, num_w_samples=100, burn_in_w=100, thin_w=5, num_l_samples_per_w=100, burn_in_l=100, thin_l=5, seed=0): # 4-1
+	# def sample(self, queries, initial_w=None, num_w_samples=200, burn_in_w=2000, thin_w=200, num_l_samples_per_w=100, burn_in_l=100, thin_l=5, seed=0): # 1-1
+	# def sample(self, queries, initial_w=None, num_w_samples=100, burn_in_w=1000, thin_w=50, num_l_samples_per_w=100, burn_in_l=100, thin_l=5, seed=0): # 2-1
+	def sample(self, queries, initial_w=None, num_w_samples=500, burn_in_w=100, thin_w=5, num_l_samples_per_w=1, burn_in_l=0, thin_l=1, seed=0): # 3-1
+	# def sample(self, queries, initial_w=None, num_w_samples=100, burn_in_w=100, thin_w=5, num_l_samples_per_w=100, burn_in_l=100, thin_l=5, seed=0): # 4-1
 		'''
 		Using parallelization, sample from reward weight space
 		parameters:
@@ -50,7 +50,6 @@ class EmbeddingSampler:
 			num_l_samples (type int): The number of l to sample
 			burn_in (type int): the number of samples to burn
         	thin (type int): the increment that we take from the samples to thin out the set
-        	seed (type int): the random seed
 		returns:
 			w_samples (type np.array): The sampled reward weight vectors, size 512 for t5-small
 			l_samples (type np.array): The sampled language embeddings, size 512 for t5-small
@@ -58,20 +57,27 @@ class EmbeddingSampler:
 		w_samples = []
 		l_samples = []
 
-		traj_embeds = np.zeros((1, 512))
-		feedback_embeds = np.zeros((1, 512))
-		if len(queries) > 1:
-			traj_embeds = []
-			feedback_embeds = []
-			for i in range(1, len(queries)):
-				traj_embeds.append(queries[i][0])
-				feedback_embeds.append(queries[i][1])
-			traj_embeds = np.stack(traj_embeds)
-			feedback_embeds = np.stack(feedback_embeds)
+		# traj_embeds = np.zeros((1, 512))
+		# feedback_embeds = np.zeros((1, 512))
+		# if len(queries) > 1:
+		# 	traj_embeds = []
+		# 	feedback_embeds = []
+		# 	for i in range(1, len(queries)):
+		# 		traj_embeds.append(queries[i][0])
+		# 		feedback_embeds.append(queries[i][1])
+		# 	traj_embeds = np.stack(traj_embeds)
+		# 	feedback_embeds = np.stack(feedback_embeds)
+		traj_embeds = [np.zeros(512)]
+		feedback_embeds = [np.zeros(512)]
+		for i in range(0, len(queries)):
+			traj_embeds.append(queries[i][0].reshape(-1))
+			feedback_embeds.append(queries[i][1].reshape(-1))
+		traj_embeds = np.stack(traj_embeds)
+		feedback_embeds = np.stack(feedback_embeds)
 		if self.reward <= 2 and self.lang <= 2: # MC-MC
 			prev_w = initial_w
 			for i in range(num_w_samples * thin_w + burn_in_w):
-				w = self.w_sampler(traj_embeds, feedback_embeds, self.dim, prev_w) # do one step in mcmc to sample w
+				w = self.w_sampler(traj_embeds, feedback_embeds, self.dim, prev_w, seed=seed) # do one step in mcmc to sample w
 				prev_w = w
 				if i >= burn_in_w and i % thin_w == 0:
 					w_samples.append(w)
@@ -92,7 +98,10 @@ class EmbeddingSampler:
 			for i in range(num_w_samples):
 				# future = executor.submit(self.l_sampler, traj_embeds, w_samples[i], self.dim, num_l_samples_per_w * thin_l + burn_in_l, burn_in=burn_in_l, thin=thin_l)
 				# l_samples.append(future.result())
-				l_samples.append(self.l_sampler(traj_embeds, w_samples[i], self.dim, num_l_samples_per_w * thin_l + burn_in_l, burn_in=burn_in_l, thin=thin_l))
+				l_samples.append(self.l_sampler(traj_embeds, w_samples[i], self.dim, num_l_samples_per_w * thin_l + burn_in_l, burn_in=burn_in_l, thin=thin_l, seed=seed))
+		elif self.reward >= 3 and self.lang == 4:
+			w_samples = self.w_sampler(traj_embeds, feedback_embeds, self.dim, num_w_samples) #  approx the distribution into gaussian, and sample from using torch
+			l_samples = self.l_sampler(traj_embeds, feedback_embeds, self.dim, w_samples, num_l_samples)
 		else: # Sampling-Sampling
 			w_samples = self.w_sampler(traj_embeds, feedback_embeds, self.dim, num_w_samples) #  approx the distribution into gaussian, and sample from using torch
 			with ProcessPoolExecutor() as executor: # parallelize the l sampling (if needed)
@@ -124,10 +133,12 @@ class WeightSampler:
 		if reward == 1: self.w_sampler = mh_w
 		elif reward == 2: self.w_sampler = gibbs_w
 		elif reward == 3: self.w_sampler = laplace_w
-		elif reward == 4: self.w_sampler = ep_w
+		elif reward == 4: self.w_sampler = ep_w_dimension
 		assert self.w_sampler is not None
 
-	def sample(self, queries, initial_w=None, num_w_samples=100, burn_in=1000, thin=50, seed=0):
+	# def sample(self, queries, initial_w=None, num_w_samples=100, burn_in_w=100000, thin_w=100, seed=0): # 1
+	def sample(self, queries, initial_w=None, num_w_samples=100, burn_in_w=1000, thin_w=50, seed=0): # 2
+	# def sample(self, queries, initial_w=None, num_w_samples=100, burn_in_w=1000, thin_w=50, seed=0): # 3 and 4
 		'''
 		Sample from reward weight space. No parallelization is needed (albeit it's possible for laplace and ep after estimating the distribution)
 		parameters:
@@ -143,16 +154,26 @@ class WeightSampler:
 		'''
 		w_samples = []
 
-		if self.reward <= 2: # MC-MH
-			prev_w = initial_w
+		traj_embeds = [np.zeros(512)]
+		feedback_embeds = [np.zeros(512)]
+		for i in range(0, len(queries)):
+			traj_embeds.append(queries[i][0].reshape(-1))
+			feedback_embeds.append(queries[i][1].reshape(-1))
+		traj_embeds = np.stack(traj_embeds)
+		feedback_embeds = np.stack(feedback_embeds)
+
+		if self.reward <= 2: # MC
+			# prev_w = initial_w
+			prev_w = np.zeros(self.dim, dtype=np.float32)
 			for i in range(num_w_samples * thin_w + burn_in_w):
-				w = self.w_sampler(queries, self.dim, prev_w) # do one step in mcmc to sample w
+				w = self.w_sampler(traj_embeds, feedback_embeds, self.dim, prev_w, seed=seed) # do one step in mcmc to sample w
 				prev_w = w
 				if i >= burn_in_w and i % thin_w == 0:
 					w_samples.append(w)
 
-		elif self.reward >= 3 and self.lang <= 2: # Sampling-MC
-			w_samples = self.w_sampler(queries, self.dim, num_w_samples) #  approx the distribution into gaussian, and sample from using torch
+		elif self.reward >= 3: # Sampling-MC
+			w_samples = self.w_sampler(traj_embeds, feedback_embeds, self.dim, num_w_samples).astype(np.float32) #  approx the distribution into gaussian, and sample from using torch
 		
-		if self.reward <= 2: w_samples = torch.stack(w_samples)
+		if self.reward <= 2: w_samples = torch.from_numpy(np.stack(w_samples))
+		else: w_samples = torch.from_numpy(w_samples)
 		return w_samples
