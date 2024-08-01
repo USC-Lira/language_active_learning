@@ -3,11 +3,11 @@
 
 import numpy as np
 import argparse
+import torch
 from torch.utils.data import DataLoader
 
-
 from model_analysis.improve_trajectory import initialize_reward
-from pref_learning.pref_based_learning import load_data, get_feature_value, evaluate
+from pref_learning.active_sim_pb import load_data, get_feature_value, evaluate_ce
 from pref_learning.pref_dataset import EvalDataset
 
 true_reward_dim = 5
@@ -42,18 +42,21 @@ feature_value_stds = np.std(all_features, axis=0)
 train_feature_values = (train_feature_values - feature_value_means) / feature_value_stds
 test_feature_values = (test_feature_values - feature_value_means) / feature_value_stds
 
+test_traj_embeds = np.load(f"{args.data_dir}/test/traj_embeds.npy")
+test_traj_embeds /= (np.mean(np.linalg.norm(test_traj_embeds, axis=1))) # mean
+
 true_rewards = []
-for _ in range(4):
+for _ in range(1):
     cross_entropy = 1.0
     true_reward = None
-    while cross_entropy > 0.4:
+    while cross_entropy > 0.2:
         true_reward = initialize_reward(true_reward_dim)
         print(true_reward)
         true_traj_rewards = test_feature_values @ true_reward
-        test_entropy = evaluate(test_data, true_traj_rewards, true_reward, test_nlcomps_embed, test=True)
+        test_entropy = evaluate_ce(test_data, true_traj_rewards, true_reward, test_traj_embeds, test=True)
         cross_entropy = test_entropy
         print(cross_entropy)
     true_rewards.append(true_reward)
 
-np.save('/scr/eisukehirota/language-preference-learning/lang_pref_learning/pref_learning/true_rewards/1/true_rewards.npy', true_rewards)
+np.save('/scr/eisukehirota/language_active_learning/lal/pref_learning/true_rewards/5/true_rewards.npy', true_rewards[0])
 print(true_rewards)
