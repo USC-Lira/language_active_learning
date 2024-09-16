@@ -124,6 +124,19 @@ def load_data(args, split='train', DEBUG=False):
     if DEBUG:
         print("len of trajs: " + str(len(trajs)))
 
+    # artificially increasing dataset from 134 trajs to 968 trajs
+    if split == "train":
+        dupe_traj = 133
+        traj_134 = trajs[dupe_traj, :, :]
+        copies_traj = np.repeat(traj_134[np.newaxis, :, :], 834, axis=0)
+        trajs = np.concatenate((trajs, copies_traj), axis=0)
+        traj_img_134 = traj_img_obs[dupe_traj, :, :]
+        copies_traj_img = np.repeat(traj_img_134[np.newaxis, :, :], 834, axis=0)
+        traj_img_obs = np.concatenate((traj_img_obs, copies_traj_img), axis=0)
+        actions_134 = actions[dupe_traj, :, :]
+        copies_actions = np.repeat(actions_134[np.newaxis, :, :], 834, axis=0)
+        actions = np.concatenate((actions, copies_actions), axis=0)
+
     # need to run categorize.py first to get these files
     greater_nlcomps = json.load(open(f"{args.data_dir}/train/greater_nlcomps.json", "rb"))
     less_nlcomps = json.load(open(f"{args.data_dir}/train/less_nlcomps.json", "rb"))
@@ -131,18 +144,6 @@ def load_data(args, split='train', DEBUG=False):
     if DEBUG:
         print("greater nlcomps size: " + str(len(greater_nlcomps)))
         print("less nlcomps size: " + str(len(less_nlcomps)))
-
-    # artificially increasing dataset from 134 trajs to 934 trajs
-    if split == "train":
-        traj_134 = trajs[133, :, :]
-        copies_traj = np.repeat(traj_134[np.newaxis, :, :], 834, axis=0)
-        trajs = np.concatenate((trajs, copies_traj), axis=0)
-        traj_img_134 = traj_img_obs[133, :, :]
-        copies_traj_img = np.repeat(traj_img_134[np.newaxis, :, :], 834, axis=0)
-        traj_img_obs = np.concatenate((traj_img_obs, copies_traj_img), axis=0)
-        actions_134 = actions[133, :, :]
-        copies_actions = np.repeat(actions_134[np.newaxis, :, :], 834, axis=0)
-        actions = np.concatenate((actions, copies_actions), axis=0)
 
     data = {
         "trajs": trajs,
@@ -192,7 +193,6 @@ def lang_pref_learning(
     optimal_learned_rewards, optimal_true_rewards = [], []
     all_lang_feedback = []
     all_other_language_feedback_feats = []
-    optimal_learned_rewards, optimal_true_rewards = [], []
     logsigmoid = nn.LogSigmoid()
     init_ce = evaluate(test_dataloader, test_traj_true_rewards, learned_reward, test_traj_embeds, device=device)
     print("Initial Cross Entropy:", init_ce)
@@ -207,7 +207,8 @@ def lang_pref_learning(
     optimal_true_rewards.append(optimal_true_reward)
 
     # call next_traj_method fxn to get the iterator
-    init_reward = learned_reward.linear.weight[0].detach()
+    init_reward = learned_reward.linear.weight[0].detach().clone()
+    init_reward /= torch.norm(init_reward)
     iterator = next_traj_method(traj_embeds, lang_embeds, init_reward, args.active, args.reward, args.lang, args.seed)
 
     # for it, train_lang_data in enumerate(train_lang_dataloader):
@@ -216,7 +217,7 @@ def lang_pref_learning(
     score = np.inf
     # while score >= epsilon:
     while i < 50:
-    # while i < 5:
+    # while i < 10:
         print(f"_____________")
         print(f"Iteration: {i}")
         # sample w and l from the iterator
@@ -224,10 +225,11 @@ def lang_pref_learning(
         
         start_time = time.time()
         _, idx, score = iterator.next() # this takes up a lot of cpu percentage
+        print(f"Iterating took: {time.time() - start_time} seconds")
         # score = 100 # sanity check
         # idx = i # sanity check
-        print(f"Iterating took: {time.time() - start_time} seconds")
         print(f"Score: {score}, Idx: {idx}")
+        i += 1
 
         # reward weight sampling + info gain
         curr_traj_embed = traj_embeds[idx]
@@ -315,11 +317,11 @@ def lang_pref_learning(
                 # Backprop
                 optimizer.zero_grad()
                 loss.backward()
-                optimizer.step()
-                    
+                optimizer.step()   
 
             print(f"Loss: {loss.item():.4f}, Norm of learned reward: {torch.norm(learned_reward.linear.weight):.4f}")
             learned_reward_norms.append(torch.norm(learned_reward.linear.weight).item())
+            
             cross_entropy = evaluate(test_dataloader, test_traj_true_rewards, learned_reward, test_traj_embeds, device=device)
             eval_cross_entropies.append(cross_entropy)
             optimal_learned_reward, optimal_true_reward = get_optimal_traj(
@@ -329,8 +331,6 @@ def lang_pref_learning(
             print(f"Cross Entropy {i}: {cross_entropy}")
             optimal_learned_rewards.append(optimal_learned_reward)
             optimal_true_rewards.append(optimal_true_reward)
-
-        i += 1
 
     return_dict = {
         "cross_entropy": eval_cross_entropies,
@@ -552,14 +552,6 @@ def run(args):
 
     # Compatibility with old models
     state_dict = torch.load(os.path.join(args.model_dir, "best_model_state_dict.pth"))
-    if args.old_model:
-        new_state_dict = {}
-        for k, v in state_dict.items():
-            new_k = k.replace("_hidden_layer", ".0")
-            new_k = new_k.replace("_output_layer", ".2")
-            new_state_dict[new_k] = v
-        state_dict = new_state_dict
-
     model.load_state_dict(state_dict)
     model.eval()
 
