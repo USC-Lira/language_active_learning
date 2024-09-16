@@ -11,6 +11,9 @@ def laplace_w(traj_embeds, feedback_embeds, latent_dim, num_w_samples):
     returns:
         w_samples (type torch.tensor): the set of w samples
     '''
+    traj_embeds = traj_embeds[1:]
+    feedback_embeds = feedback_embeds[1:]
+
     def logp(i, w):
         feedback_embed = feedback_embeds[i].reshape(1, 512)
         diff = (w - traj_embeds[i]).reshape(512, 1)
@@ -38,9 +41,6 @@ def laplace_w(traj_embeds, feedback_embeds, latent_dim, num_w_samples):
     def constraint_function(w):
         return 1 - np.linalg.norm(w)
 
-    traj_embeds = traj_embeds[1:]
-    feedback_embeds = feedback_embeds[1:]
-
     constraints = {'type': 'ineq', 'fun': constraint_function}
     solution = scipy.optimize.minimize(neg_logprob, np.zeros(latent_dim), method='SLSQP', constraints=constraints) # optimize using SLSQP to get the true mode
     solution = scipy.optimize.minimize(neg_logprob, solution.x, method='L-BFGS-B', options={"maxiter":1}) # optimize using L-BFGS-B to get the approx hessian
@@ -66,6 +66,9 @@ def laplace_l(traj_embeds, w, latent_dim, num_l_samples):
     returns:
         l_samples (type torch.tensor): the set of l samples
     '''
+    traj_embeds = traj_embeds[1:]
+    feedback_embeds = feedback_embeds[1:]
+
     def logp(i, l):
         diff = (w - traj_embeds[i]).reshape(512, 1).astype(np.float32)
         return np.dot(l.reshape(1, 512), diff).item() # new model propto BT model using cosine similarity
@@ -73,7 +76,7 @@ def laplace_l(traj_embeds, w, latent_dim, num_l_samples):
     def logprob(l):
         if np.linalg.norm(l) > 1: return -100
         log_prob = np.float32(0.)
-        for i in range(traj_embeds.shape[0]-1): 
+        for i in range(traj_embeds.shape[0]): 
             log_prob += logp(i, l)
         return log_prob
 
@@ -84,14 +87,45 @@ def laplace_l(traj_embeds, w, latent_dim, num_l_samples):
         return 1 - np.linalg.norm(l)
 
     constraints = {'type': 'ineq', 'fun': constraint_function}
-    solution = scipy.optimize.minimize(neg_logprob, np.zeros(latent_dim), method='SLSQP', constraints=constraints) # optimize using SLSQP to get the true mode
-    solution = scipy.optimize.minimize(neg_logprob, solution.x, method='L-BFGS-B', options={"maxiter":10}) # optimize using L-BFGS-B to get the approx hessian
-    mode = solution.x / np.linalg.norm(solution.x)
-    inv_hess = solution.hess_inv.todense() * 1e-10
-    lambs = np.linalg.norm(inv_hess) # L2 regularization
-    inv_hess += lambs * np.eye(latent_dim)
+    solution = scipy.optimize.minimize(neg_logprob, np.zeros(latent_dim), method='SLSQP', constraints=constraints, options={"maxiter":5}) # optimize using SLSQP to get the true mode
+    solution = scipy.optimize.minimize(neg_logprob, solution.x, method='L-BFGS-B', options={"maxiter":1}) # optimize using L-BFGS-B to get the approx hessian
+    mode = solution.x / np.maximum(np.linalg.norm(solution.x), 1e-8)
+    inv_hess = solution.hess_inv.todense() * 1e-2
     l_samples = np.random.multivariate_normal(np.nan_to_num(mode), np.nan_to_num(inv_hess), size=num_l_samples)
     return l_samples
+
+def laplace_l_sampling(traj_embeds, w_samples, latent_dim, num_w_samples, num_l_samples):
+    '''
+    This is the Laplace Approximation method, approximating the embedding space as a gaussian, and then direct sampling from the approximation.
+    parameters:
+        queries (type list): the list of all query feedbacks provided by the user
+        w (type torch.tensor): the sampled reward model weights that is needed to then sample language
+        latent_dim (type int): the dimension of the latent space of the embeddings
+        num_l_samples (type int): the number of l's that are sampled
+    returns:
+        l_samples (type torch.tensor): the set of l samples
+    '''
+    traj_embeds = traj_embeds[1:]
+
+    def logprob(l):
+        if np.linalg.norm(l) > 1: return -100
+        embed_diff = (w_samples.reshape(w_samples.shape[0], 1, w_samples.shape[1]) - traj_embeds.reshape(1, traj_embeds.shape[0], traj_embeds.shape[1])).reshape(-1, w_samples.shape[1])
+        align = embed_diff @ l
+        return np.sum(align)
+
+    def neg_logprob(l):
+        return -logprob(l)
+
+    def constraint_function(l):
+        return 1 - np.linalg.norm(l)
+
+    constraints = {'type': 'ineq', 'fun': constraint_function}
+    solution = scipy.optimize.minimize(neg_logprob, np.zeros(latent_dim), method='SLSQP', constraints=constraints, options={"maxiter":5}) # optimize using SLSQP to get the true mode
+    solution = scipy.optimize.minimize(neg_logprob, solution.x, method='L-BFGS-B', options={"maxiter":1}) # optimize using L-BFGS-B to get the approx hessian
+    mode = solution.x / np.maximum(np.linalg.norm(solution.x), 1e-8)
+    inv_hess = solution.hess_inv.todense() * 1e-2
+    l_samples = np.random.multivariate_normal(np.nan_to_num(mode), np.nan_to_num(inv_hess), size=num_w_samples * num_l_samples)
+    return l_samples.reshape(num_w_samples, num_l_samples, -1)
 
 if __name__ == "__main__":
     import time
