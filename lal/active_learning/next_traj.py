@@ -55,6 +55,7 @@ class OpenIter:
         self.queries = []
         self.initial_w = initial_w
         self.seed = seed
+        self.prev_idxs = []
 
     def feed(self, curr_traj_embed, feedback_embed, pos):
         '''
@@ -80,7 +81,9 @@ class OpenIter:
         # self.initial_w = w_samples[-1]
         self.initial_w = torch.mean(w_samples, dim=0)
         # start_time = time.time()
-        idx, ig = info(w_samples, l_samples, self.traj_embeds)
+        idx, ig = info(w_samples, l_samples, self.traj_embeds, self.prev_idxs)
+        self.prev_idxs.append(idx)
+        self.prev_idxs.sort()
         # print(f"Info gain took: {time.time() - start_time} seconds")
         return w_samples, idx, ig
 
