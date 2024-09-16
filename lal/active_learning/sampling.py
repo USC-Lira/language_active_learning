@@ -2,7 +2,7 @@ import torch
 import numpy as np
 from lal.active_learning.mh import mh_w, mh_l
 from lal.active_learning.gibbs import gibbs_w, gibbs_l
-from lal.active_learning.laplace import laplace_w, laplace_l
+from lal.active_learning.laplace import laplace_w, laplace_l, laplace_l_sampling
 from lal.active_learning.ep import ep_w, ep_l, ep_w_dimension
 import time
 from concurrent.futures import ProcessPoolExecutor
@@ -36,6 +36,8 @@ class EmbeddingSampler:
 		elif lang == 3: self.l_sampler = laplace_l
 		elif lang == 4: self.l_sampler = ep_l
 		assert self.l_sampler is not None
+
+		if reward == 3 and lang == 3: self.l_sampler = laplace_l_sampling
 	
 	# def sample(self, queries, initial_w=None, num_w_samples=200, burn_in_w=2000, thin_w=200, num_l_samples_per_w=100, burn_in_l=100, thin_l=5, seed=0): # 1-1
 	# def sample(self, queries, initial_w=None, num_w_samples=100, burn_in_w=1000, thin_w=50, num_l_samples_per_w=100, burn_in_l=100, thin_l=5, seed=0): # 2-1
@@ -99,15 +101,9 @@ class EmbeddingSampler:
 				# future = executor.submit(self.l_sampler, traj_embeds, w_samples[i], self.dim, num_l_samples_per_w * thin_l + burn_in_l, burn_in=burn_in_l, thin=thin_l)
 				# l_samples.append(future.result())
 				l_samples.append(self.l_sampler(traj_embeds, w_samples[i], self.dim, num_l_samples_per_w * thin_l + burn_in_l, burn_in=burn_in_l, thin=thin_l, seed=seed))
-		elif self.reward >= 3 and self.lang == 4:
+		else:
 			w_samples = self.w_sampler(traj_embeds, feedback_embeds, self.dim, num_w_samples) #  approx the distribution into gaussian, and sample from using torch
-			l_samples = self.l_sampler(traj_embeds, feedback_embeds, self.dim, w_samples, num_l_samples)
-		else: # Sampling-Sampling
-			w_samples = self.w_sampler(traj_embeds, feedback_embeds, self.dim, num_w_samples) #  approx the distribution into gaussian, and sample from using torch
-			with ProcessPoolExecutor() as executor: # parallelize the l sampling (if needed)
-				for i in range(num_w_samples):
-					future = executor.submit(self.l_sampler, traj_embeds, w_samples[i], self.dim, num_l_samples_per_w)
-					l_samples.append(future.result())
+			l_samples = self.l_sampler(traj_embeds, w_samples, self.dim, num_w_samples, num_l_samples_per_w)
 		
 		if self.reward <= 2: w_samples = torch.from_numpy(np.stack(w_samples))
 		else: w_samples = torch.from_numpy(w_samples)
