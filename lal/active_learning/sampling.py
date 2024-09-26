@@ -19,7 +19,6 @@ class EmbeddingSampler:
 			lang (type int): Specifies which sampling method will be used for sampling from language space
 		'''
 		self.dim = dim
-		self.feedback_embeddings = []
 
 		self.reward = reward
 		self.w_sampler = None
@@ -122,7 +121,6 @@ class WeightSampler:
 			reward (type int): Specifies which sampling method will be used for sampling from reward weight space
 		'''
 		self.dim = dim
-		self.feedback_embeddings = []
 
 		self.reward = reward
 		self.w_sampler = None
@@ -173,3 +171,56 @@ class WeightSampler:
 		if self.reward <= 2: w_samples = torch.from_numpy(np.stack(w_samples))
 		else: w_samples = torch.from_numpy(w_samples)
 		return w_samples
+
+class LanguageSampler:
+	'''
+	This is the sampler for only language. Only samples l given the reward weights.
+	'''
+	def __init__(self, dim, lang=0):
+		'''
+		parameters:
+			dim (type int): The size embedding space
+			reward (type int): Specifies which sampling method will be used for sampling from reward weight space
+			lang (type int): Specifies which sampling method will be used for sampling from language space
+		'''
+		self.dim = dim
+		
+		self.lang = lang
+		self.l_sampler = None
+		if lang == 1: self.l_sampler = mh_l
+		elif lang == 2: self.l_sampler = gibbs_l
+		elif lang == 3: self.l_sampler = laplace_l_sampling
+		elif lang == 4: self.l_sampler = ep_l
+		assert self.l_sampler is not None
+	
+	def sample(self, queries, w_samples=None, num_l_samples=1, burn_in_l=0, thin_l=1, seed=0):
+		'''
+		Using parallelization, sample from reward weight space
+		parameters:
+        	queries (type list): the list of all query feedbacks provided by the user
+			initial_w (type torch.tensor): the mode of the previous time
+			num_w_samples (type int): The number of w to sample
+			num_l_samples (type int): The number of l to sample
+			burn_in (type int): the number of samples to burn
+        	thin (type int): the increment that we take from the samples to thin out the set
+		returns:
+			w_samples (type np.array): The sampled reward weight vectors, size 512 for t5-small
+			l_samples (type np.array): The sampled language embeddings, size 512 for t5-small
+		'''
+		l_samples = []
+
+		traj_embeds = [np.zeros(512)]
+		feedback_embeds = [np.zeros(512)]
+		for i in range(0, len(queries)):
+			traj_embeds.append(queries[i][0].reshape(-1))
+			feedback_embeds.append(queries[i][1].reshape(-1))
+		traj_embeds = np.stack(traj_embeds)
+		feedback_embeds = np.stack(feedback_embeds)
+
+		if self.lang <= 2: # MC-MC
+			for i in range(len(w_samples)):
+				l_samples.append(self.l_sampler(traj_embeds, w_samples[i], self.dim, num_l_samples * thin_l + burn_in_l, burn_in=burn_in_l, thin=thin_l, seed=seed))
+			l_samples = torch.tensor(np.array(l_samples))
+		else:
+			l_samples = torch.from_numpy(self.l_sampler(traj_embeds, w_samples, self.dim, len(w_samples), num_l_samples))
+		return l_samples
