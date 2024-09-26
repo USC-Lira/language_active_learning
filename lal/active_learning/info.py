@@ -12,13 +12,13 @@ def info(w_samples, l_samples, traj_embeds, prev_idxs):
 		idx (type int): the index of the next trajectory to query the human that provides the best info gain
 		ig (type float): the max amount of info gained
 	'''
-	traj_embeds = np.delete(traj_embeds, prev_idxs, 0)
+	modified_traj_embeds = np.delete(traj_embeds, prev_idxs, 0)
 	M = w_samples.shape[0] # w/ shape (M, dim)
 	dim = w_samples.shape[1]
 	K = l_samples.shape[1] # w/ shape (M, K, dim)
-	T = traj_embeds.shape[0] # (T, dim)
+	T = modified_traj_embeds.shape[0] # (T, dim)
 
-	embed_diff = (w_samples.unsqueeze(1) - traj_embeds.unsqueeze(0)).reshape(M*T, dim) # shape (M*T, dim)
+	embed_diff = (w_samples.unsqueeze(1) - modified_traj_embeds.unsqueeze(0)).reshape(M*T, dim) # shape (M*T, dim)
 	align = np.exp(embed_diff @ l_samples.reshape(M*K, dim).T) # shape (M*T, M*K)
 	probs = align.reshape(M, T, -1).transpose(0, 1) # shape (T, M, M*K), so: (trajectory, weight, language)
 	probs /= torch.sum(probs, dim=-1).unsqueeze(-1) # shape (T, M, M*K) # this step is here b/c the prob fxn is actually equal to the numerator divide by all possible language
