@@ -1,6 +1,6 @@
 import torch
 import numpy as np
-from lal.active_learning.sampling import EmbeddingSampler, WeightSampler
+from lal.active_learning.sampling import EmbeddingSampler, WeightSampler, LanguageSampler
 from lal.active_learning.info import info
 import time
 
@@ -27,9 +27,14 @@ def next_traj_method(traj_embeds=None, lang_embeds=None, initial_w=None, active=
         next_traj_iter = DatasetIter(traj_embeds, lang_embeds, reward)
     
     # sample completely randomly
-    else:
+    elif active == 4:
         assert traj_embeds is not None
         next_traj_iter = RandomIter(traj_embeds, reward, initial_w, seed)
+
+    # BALD
+    elif active == 5:
+        assert traj_embeds is not None and lang_embeds is not None
+        next_traj_iter = BALDIter(traj_embeds, lang_embeds, initial_w, lang, seed)
 
     return next_traj_iter
 
@@ -86,6 +91,52 @@ class OpenIter:
         self.prev_idxs.sort()
         # print(f"Info gain took: {time.time() - start_time} seconds")
         return w_samples, idx, ig
+
+class BALDIter:
+    '''
+    Object that returns the next trajectory. Using information gain, select the next trajectory.
+    Sample from reward space, then based on each reward space, sample from open vocabulary embedding space.
+    '''
+    def __init__(self, traj_embeds, lang_embeds, models, lang, seed):
+        '''
+        parameters:
+            traj_embeds (type np.array): Contains the trajectory embedding, a float vector size 512
+            lang_embeds (type np.array): Contains the language embedding, a float vector size 512
+            models (type torch.tensor): Neural network reward models
+            seed (type int): Random seed
+        '''
+        self.traj_embeds = traj_embeds
+        self.dim = self.traj_embeds[-1].shape[0]
+        self.sampler = LanguageSampler(self.dim, lang=lang)
+        self.queries = []
+        self.w_samples = np.stack([model.linear.weight.detach().numpy() for model in models]).squeeze(1).tolist()
+        self.seed = seed
+        self.prev_idxs = []
+
+    def feed(self, curr_traj_embed, feedback_embed, pos):
+        '''
+        Every time a human feedback is given from a query, add the results to our list
+        parameters:
+        	curr_traj_embed (type np.array): Embedding of the current trajectory
+            feedback_embed (type np.array): Embedding of the feedback given
+            pos (type bool): Whether or not feedback is positive or negative
+        '''
+        self.queries.append([curr_traj_embed.numpy(), feedback_embed.numpy(), pos])
+
+    def next(self):
+        '''
+        Sample w and l, perform info gain to get next trajectory idx
+        returns:
+			w_samples (type np.array): The sampled reward weight vectors, size 512 for t5-small
+            idx (type int): An int that contains the idx of the trajectory we want to show
+            ig (type float): The amount of info gained
+        '''
+        l_samples = self.sampler.sample(self.queries, self.w_samples, seed=self.seed)
+        idx, ig = info(torch.tensor(self.w_samples), l_samples, self.traj_embeds, self.prev_idxs)
+        self.prev_idxs.append(idx)
+        self.prev_idxs.sort()
+        # print(f"Info gain took: {time.time() - start_time} seconds")
+        return idx, ig
 
 class LLMIter:
     '''
