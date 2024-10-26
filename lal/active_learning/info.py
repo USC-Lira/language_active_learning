@@ -1,4 +1,5 @@
 import torch
+torch.set_printoptions(precision=8)
 import numpy as np
 
 def info(w_samples, l_samples, traj_embeds, prev_idxs):
@@ -25,7 +26,19 @@ def info(w_samples, l_samples, traj_embeds, prev_idxs):
 	tmp = M * probs / torch.sum(probs, dim=1).unsqueeze(1)
 	f_values = torch.sum(torch.sum(torch.log2(tmp), dim=2), dim=1) / (M*K) # shape (T)
 	
+	# add noise
+	var = 1e-9
+	noise = torch.tensor(np.random.randn(len(f_values)) * var ** 0.5)
+	f_values += noise
+
+	# argmax approach
 	idx = torch.argmax(f_values) # easy code uses argmin but also divides by negative M for some reason
+
+	# noisy softmax approach
+	# tmp = 0.5
+	# f_values = torch.softmax(f_values / tmp, dim=0)
+	# idx = np.where(np.random.multinomial(1, f_values.numpy()) == 1)[0][0]
+	
 	ig = torch.abs(torch.nan_to_num(f_values[idx], nan=1))
 
 	for i in prev_idxs:
