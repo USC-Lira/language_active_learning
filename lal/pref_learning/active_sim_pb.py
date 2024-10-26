@@ -126,8 +126,8 @@ def load_data(args, split='train', DEBUG=False):
         print("len of trajs: " + str(len(trajs)))
 
     # artificially increasing dataset from 134 trajs to 968 trajs
-    if split == "train":
-        dupe_traj = 133
+    if args.dupe_traj >= 0 and split == "train":
+        dupe_traj = args.dupe_traj
         traj_134 = trajs[dupe_traj, :, :]
         copies_traj = np.repeat(traj_134[np.newaxis, :, :], 834, axis=0)
         trajs = np.concatenate((trajs, copies_traj), axis=0)
@@ -212,8 +212,8 @@ def lang_pref_learning(
     i = 0
     score = np.inf
     # while score >= epsilon:
-    while i < 50:
-    # while i < 10:
+    # while i < 50:
+    while i < 15:
         print(f"_____________")
         print(f"Iteration: {i}")
         # sample w and l from the iterator
@@ -447,6 +447,14 @@ def run(args):
     train_traj_true_rewards = np.dot(train_feature_values, true_reward)
     test_traj_true_rewards = np.dot(test_feature_values, true_reward)
 
+    # remove trajs that have too high of a feature
+    if args.dupe_traj == -1:
+        idxs = np.linalg.norm(train_feature_values, axis=1) < 2
+        train_trajs = train_trajs[idxs]
+        train_feature_values = train_feature_values[idxs]
+        train_img_obs = train_img_obs[idxs]
+        train_actions = train_actions[idxs]
+
     # Initialize the dataset and dataloader
     train_lang_dataset = LangPrefDataset(train_trajs, train_feature_values)
     train_lang_data = DataLoader(train_lang_dataset, batch_size=1, shuffle=True)
@@ -548,10 +556,23 @@ def run(args):
     # test_traj_embeds = np.load(f"{args.data_dir}/test/traj_embeds.npy")
     # test_traj_embeds /= (np.mean(np.linalg.norm(test_traj_embeds, axis=1))) # mean
     # test_lang_embeds = np.load(f"{args.data_dir}/test/lang_embeds.npy")
+
+    # Normalize the traj embeds
+    # print(np.linalg.norm(train_traj_embeds, axis=1), np.linalg.norm(test_traj_embeds, axis=1))
+    # all_trajs = np.concatenate([train_traj_embeds, test_traj_embeds], axis=0)
+    # traj_embeds_means = np.mean(all_trajs, axis=0)
+    # traj_embeds_stds = np.std(all_trajs, axis=0)
+    # train_traj_embeds = (train_traj_embeds - traj_embeds_means) / traj_embeds_stds
+    # test_traj_embeds = (test_traj_embeds - traj_embeds_means) / traj_embeds_stds
+    # train_traj_embeds /= 3
+    # test_traj_embeds /= 3
     
     print("Mean Norm of Traj Embeds:", np.linalg.norm(train_traj_embeds, axis=1).mean())
+    print("Mean Std of Traj Embeds:", np.std(train_traj_embeds))
     print("Mean Norm of Lang Embeds:", np.linalg.norm(train_lang_embeds, axis=1).mean())
+    print("Mean Norm of Trajs:", np.linalg.norm(np.linalg.norm(train_trajs, axis=1), axis=1).mean())
     print("Norm of feature values:", np.linalg.norm(train_feature_values, axis=1).mean())
+    print("Mean Std of Feature Values:", np.std(train_feature_values))
 
     # Random init learned reward
     learned_reward = RewardFunc(feature_dim, 1)
@@ -599,27 +620,26 @@ def run(args):
         device,
     )    
 
-    postfix_noisy = f"{args.active}_{args.reward}_{args.lang}_noisy_{args.seed}"
-    
-    # Save the results in .npz files
+    postfix_noisy = f"{args.active}_{args.reward}_{args.lang}_dupe_traj_{args.dupe_traj}_seed_{args.seed}"
     save_results(args, noisy_results, test_ce=test_ce, postfix=postfix_noisy)
-    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(15, 5))
-    ax1.plot(noisy_results["cross_entropy"], label="Noisy")
-    ax1.plot([0, len(noisy_results["cross_entropy"])], [test_ce, test_ce], 'k--', label='Ground Truth')
-    ax1.set_xlabel("Number of Queries")
-    ax1.set_ylabel("Cross-Entropy")
-    ax1.set_title("Feedback, True Dist: Softmax")
-    ax1.legend()
+    
+    # fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(15, 5))
+    # ax1.plot(noisy_results["cross_entropy"], label="Noisy")
+    # ax1.plot([0, len(noisy_results["cross_entropy"])], [test_ce, test_ce], 'k--', label='Ground Truth')
+    # ax1.set_xlabel("Number of Queries")
+    # ax1.set_ylabel("Cross-Entropy")
+    # ax1.set_title("Feedback, True Dist: Softmax")
+    # ax1.legend()
 
-    ax2.plot(noisy_results["optimal_learned_rewards"], label="Noisy, Learned Reward")
-    ax2.plot(noisy_results["optimal_true_rewards"], label="True Reward", c="r")
-    ax2.set_xlabel("Number of Queries")
-    ax2.set_ylabel("Reward Value")
-    ax2.set_title("True Reward of Optimal Trajectory")
-    ax2.legend()
+    # ax2.plot(noisy_results["optimal_learned_rewards"], label="Noisy, Learned Reward")
+    # ax2.plot(noisy_results["optimal_true_rewards"], label="True Reward", c="r")
+    # ax2.set_xlabel("Number of Queries")
+    # ax2.set_ylabel("Reward Value")
+    # ax2.set_title("True Reward of Optimal Trajectory")
+    # ax2.legend()
 
-    plt.tight_layout()
-    plt.savefig(f"{args.true_reward_dir}/pref_learning/{args.active}_{args.reward}_{args.lang}_noisy_{args.seed}.png")
+    # plt.tight_layout()
+    # plt.savefig(f"{args.true_reward_dir}/pref_learning/{args.active}_{args.reward}_{args.lang}_noisy_{args.seed}.png")
 
 if __name__ == "__main__":
     torch.set_num_threads(num_cpus)
@@ -709,6 +729,12 @@ if __name__ == "__main__":
         type=int,
         choices=[1, 2, 3, 4],
         help="Choice for Language sampling method",
+    )
+    parser.add_argument(
+        "--dupe-traj",
+        default="133",
+        type=int,
+        help="What trajectory to duplicate to replicate a massive dataset",
     )
 
     args = parser.parse_args()
