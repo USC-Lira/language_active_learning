@@ -6,9 +6,9 @@ import json
 
 from transformers import AutoModel, AutoTokenizer, T5EncoderModel
 
-from lang_pref_learning.feature_learning.utils import LANG_MODEL_NAME, LANG_OUTPUT_DIM
-from lang_pref_learning.model.encoder import NLTrajAutoencoder
-from lang_pref_learning.model_analysis.utils import get_traj_lang_embeds
+from lal.feature_learning.utils import LANG_MODEL_NAME, LANG_OUTPUT_DIM
+from lal.model.encoder import NLTrajAutoencoder
+from lal.model_analysis.utils import get_traj_lang_embeds
 
 from data.utils import gt_reward, speed, height, distance_to_cube, distance_to_bottle
 from data.utils import RS_STATE_OBS_DIM, RS_ACTION_DIM, RS_PROPRIO_STATE_DIM, RS_OBJECT_STATE_DIM
