@@ -109,7 +109,7 @@ class BALDIter:
         self.dim = self.traj_embeds[-1].shape[0]
         self.sampler = LanguageSampler(self.dim, lang=lang)
         self.queries = []
-        self.w_samples = np.stack([model.linear.weight.detach().numpy() for model in models]).squeeze(1).tolist()
+        self.w_samples = np.stack([model.linear.weight.detach().numpy() for model in models]).squeeze(1)
         self.seed = seed
         self.prev_idxs = []
 
@@ -132,7 +132,7 @@ class BALDIter:
             ig (type float): The amount of info gained
         '''
         l_samples = self.sampler.sample(self.queries, self.w_samples, seed=self.seed)
-        idx, ig = info(torch.tensor(self.w_samples), l_samples, self.traj_embeds, self.prev_idxs)
+        idx, ig = info(torch.tensor(self.w_samples).to(torch.double), l_samples, self.traj_embeds, self.prev_idxs)
         self.prev_idxs.append(idx)
         self.prev_idxs.sort()
         # print(f"Info gain took: {time.time() - start_time} seconds")
