@@ -10,9 +10,9 @@ from tqdm import tqdm
 import time
 
 
-from lang_pref_learning.feature_learning.nl_traj_dataset import NLTrajComparisonDataset
-from lang_pref_learning.model.encoder import NLTrajAutoencoder
-from lang_pref_learning.feature_learning.utils import (
+from lal.feature_learning.nl_traj_dataset import NLTrajComparisonDataset
+from lal.model.encoder import NLTrajAutoencoder
+from lal.feature_learning.utils import (
     timeStamped,
     LANG_MODEL_NAME,
     LANG_OUTPUT_DIM,

@@ -5,7 +5,7 @@ import torch
 import argparse
 import os
 
-from lang_pref_learning.feature_learning.utils import LANG_MODEL_NAME
+from lal.feature_learning.utils import LANG_MODEL_NAME
 
 os.environ["OMP_NUM_THREADS"] = "4"
 
