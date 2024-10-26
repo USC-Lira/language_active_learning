@@ -21,6 +21,8 @@ from transformers import AutoModel, AutoTokenizer, T5EncoderModel
 import time
 import psutil
 import matplotlib.pyplot as plt
+from sklearn.neighbors import KernelDensity
+from scipy.stats import entropy
 
 from lal.active_learning.next_traj import next_traj_method
 from lal.model.encoder import NLTrajAutoencoder
@@ -62,9 +64,10 @@ class RewardFunc(nn.Module):
         super(RewardFunc, self).__init__()
         self.linear = nn.Linear(input_dim, output_dim, bias=False)
         self.apply(init_weights_with_norm_one)
+        self.dropout = nn.Dropout(p=0.0)
 
     def forward(self, x):
-        return self.linear(x)
+        return self.dropout(self.linear(x))
 
 def get_lang_feedback_aspect(curr_feature, reward, optimal_traj_feature, noisy=False, temperature=1.0):
     """
@@ -100,7 +103,6 @@ def get_lang_feedback_aspect(curr_feature, reward, optimal_traj_feature, noisy=F
         pos = False
 
     return feature_idx, pos
-    
 
 def load_data(args, split='train', DEBUG=False):
     # Load the test trajectories and language comparisons
@@ -125,8 +127,8 @@ def load_data(args, split='train', DEBUG=False):
         print("len of trajs: " + str(len(trajs)))
 
     # artificially increasing dataset from 134 trajs to 968 trajs
-    if split == "train":
-        dupe_traj = 133
+    if args.dupe_traj >= 0 and split == "train":
+        dupe_traj = args.dupe_traj
         traj_134 = trajs[dupe_traj, :, :]
         copies_traj = np.repeat(traj_134[np.newaxis, :, :], 834, axis=0)
         trajs = np.concatenate((trajs, copies_traj), axis=0)
@@ -160,7 +162,8 @@ def load_data(args, split='train', DEBUG=False):
 
 def get_optimal_traj(learned_reward, traj_embeds, traj_true_rewards):
     # Find the optimal trajectory with learned reward
-    learned_rewards = torch.tensor([learned_reward(torch.from_numpy(traj_embed)) for traj_embed in traj_embeds])
+    with torch.no_grad():
+        learned_rewards = torch.tensor([learned_reward(torch.from_numpy(traj_embed)) for traj_embed in traj_embeds])
     optimal_learned_reward = traj_true_rewards[torch.argmax(learned_rewards)]
     optimal_true_reward = traj_true_rewards[torch.argmax(torch.tensor(traj_true_rewards))]
     print("chosen optimal traj idx: ", torch.argmax(learned_rewards))
@@ -216,8 +219,12 @@ def lang_pref_learning(
     i = 0
     score = np.inf
     # while score >= epsilon:
-    while i < 50:
-    # while i < 10:
+    # laplace_mh_reward0_traj = [25, 21, 9, 47, 110, 65, 121, 109, 24, 133, 38, 96, 117, 103, 94, 23, 78, 84, 62, 92, 127, 42, 67, 33, 79, 83, 128, 29, 14, 99, 77, 106, 102, 116, 118, 120, 113, 90, 61, 112, 72, 6, 28, 12, 115, 45, 81, 132, 76, 17]
+    # laplace_mh_reward1_traj = [25, 57, 114, 34, 50, 121, 12, 55, 113, 68, 27, 28, 85, 24, 4, 132, 112, 51, 95, 77, 42, 127, 104, 123, 67, 102, 76, 29, 44, 107, 84, 14, 62, 89, 75, 87, 60, 78, 131, 116, 79, 2, 36, 9, 30, 92, 13, 8, 82, 125]
+    # laplace_mh_reward2_traj = [25, 57, 114, 34, 50, 121, 35, 93, 99, 84, 75, 82, 97, 118, 109, 65, 27, 95, 6, 127, 86, 96, 28, 133, 24, 77, 132, 92, 12, 9, 101, 78, 44, 98, 56, 130, 23, 89, 4, 94, 110, 45, 21, 69, 49, 108, 13, 64, 47, 17]
+    traj_reward = 0
+    num_queries = 50
+    while i < num_queries:
         print(f"_____________")
         print(f"Iteration: {i}")
         # sample w and l from the iterator
@@ -225,6 +232,8 @@ def lang_pref_learning(
         
         start_time = time.time()
         _, idx, score = iterator.next() # this takes up a lot of cpu percentage
+        # score = 100 # sanity check
+        # idx = laplace_mh_reward2_traj[i]
         print(f"Iterating took: {time.time() - start_time} seconds")
         # score = 100 # sanity check
         # idx = i # sanity check
@@ -234,6 +243,10 @@ def lang_pref_learning(
         # reward weight sampling + info gain
         curr_traj_embed = traj_embeds[idx]
         curr_feature_value = torch.tensor(feature_values[idx]).unsqueeze(0).to(torch.float64)
+
+        curr_traj_reward = torch.sum(torch.from_numpy(true_reward) * curr_feature_value.numpy())
+        traj_reward += curr_traj_reward
+        print(f"Curr traj reward: {curr_traj_reward.item()}")
 
         # check if we must still use info gain or break
         if score > epsilon:
@@ -278,6 +291,7 @@ def lang_pref_learning(
                     dim=0,
                 )
 
+            learned_reward.train()
             # print(torch.norm(nlcomp_features, dim=-1))
             for k in range(args.num_iterations):
                 # Compute dot product of lang(traj_opt - traj_cur)
@@ -313,7 +327,7 @@ def lang_pref_learning(
                         ).mean()
 
                     loss += args.lang_loss_coeff * loss_lang_pref
-
+                # print(loss.item())
                 # Backprop
                 optimizer.zero_grad()
                 loss.backward()
@@ -332,6 +346,7 @@ def lang_pref_learning(
             optimal_learned_rewards.append(optimal_learned_reward)
             optimal_true_rewards.append(optimal_true_reward)
 
+    print(f"Average Traj Reward: {traj_reward / num_queries}")
     return_dict = {
         "cross_entropy": eval_cross_entropies,
         "learned_reward_norms": learned_reward_norms,
@@ -339,52 +354,6 @@ def lang_pref_learning(
         "optimal_true_rewards": optimal_true_rewards,
     }
     return return_dict
-
-def evaluate_ce(test_dataloader, true_traj_rewards, learned_reward, traj_embeds, test=False, device="cuda"):
-    """
-    Evaluate the cross-entropy between the learned and true distributions
-
-    Input:
-        - test_dataloader: DataLoader for the test data
-        - true_traj_rewards: true rewards of the test trajectories
-        - learned_reward: the learned reward function
-        - traj_embeds: the embeddings of the test trajectories
-        - feature_scale_factor: the scale factor for the learned reward
-        - test: whether to use the true reward for evaluation
-
-    Output:
-        - total_cross_entropy: the average cross-entropy between the learned and true distributions
-    """
-    total_cross_entropy = AverageMeter("cross-entropy")
-    bce_loss = nn.BCELoss()
-    for i, test_data in enumerate(test_dataloader):
-        traj_a, traj_b, idx_a, idx_b = test_data
-
-        # get the embeddings of the two trajectories
-        traj_a_embed = traj_embeds[idx_a]
-        traj_b_embed = traj_embeds[idx_b]
-
-        # get bernoulli distributions for the two trajectories
-        true_rewards = torch.tensor([true_traj_rewards[idx_a], true_traj_rewards[idx_b]])
-        # make true probs 0 and 1
-        # true_probs = torch.tensor([torch.argmax(true_rewards) == 0, torch.argmax(true_rewards) == 1]).float()
-        # make true probs with softmax
-        true_probs = torch.softmax(true_rewards, dim=0).float()
-
-        if test:
-            learned_probs = true_probs
-
-        else:
-            traj_a_embed = torch.tensor(traj_a_embed)
-            traj_b_embed = torch.tensor(traj_b_embed)
-            # learned_rewards = torch.tensor([learned_reward(traj_a_embed), learned_reward(traj_b_embed)])
-            learned_rewards = torch.tensor([learned_reward @ traj_a_embed, learned_reward @ traj_b_embed])
-            learned_probs = torch.softmax(learned_rewards, dim=0)
-
-        # calculate cross-entropy between learned and true distributions
-        cross_entropy = bce_loss(learned_probs, true_probs)
-        total_cross_entropy.update(cross_entropy, 1)
-    return total_cross_entropy.avg
 
 def evaluate(test_dataloader, true_traj_rewards, learned_reward, traj_embeds, test=False, device="cuda"):
     """
@@ -403,6 +372,7 @@ def evaluate(test_dataloader, true_traj_rewards, learned_reward, traj_embeds, te
     """
     total_cross_entropy = AverageMeter("cross-entropy")
     bce_loss = nn.BCELoss()
+    learned_reward.eval()
     for i, test_data in enumerate(test_dataloader):
         traj_a, traj_b, idx_a, idx_b = test_data
 
@@ -498,6 +468,22 @@ def run(args):
 
     train_traj_true_rewards = np.dot(train_feature_values, true_reward)
     test_traj_true_rewards = np.dot(test_feature_values, true_reward)
+
+    # remove trajs that have too high of a feature
+    if args.dupe_traj == -1:
+        train_idxs = (np.linalg.norm(train_feature_values, axis=1) < args.max_feature_norm) & (np.linalg.norm(train_feature_values, axis=1) > args.min_feature_norm)
+        train_trajs = train_trajs[train_idxs]
+        train_feature_values = train_feature_values[train_idxs]
+        train_img_obs = train_img_obs[train_idxs]
+        train_actions = train_actions[train_idxs]
+
+        test_idxs = (np.linalg.norm(test_feature_values, axis=1) < args.max_feature_norm) & (np.linalg.norm(test_feature_values, axis=1) > args.min_feature_norm)
+        test_trajs = test_trajs[test_idxs]
+        test_feature_values = test_feature_values[test_idxs]
+        test_img_obs = test_img_obs[test_idxs]
+        test_actions = test_actions[test_idxs]
+
+        print(train_idxs.sum(), test_idxs.sum())
 
     # Initialize the dataset and dataloader
     train_lang_dataset = LangPrefDataset(train_trajs, train_feature_values)
@@ -600,10 +586,29 @@ def run(args):
     # test_traj_embeds = np.load(f"{args.data_dir}/test/traj_embeds.npy")
     # test_traj_embeds /= (np.mean(np.linalg.norm(test_traj_embeds, axis=1))) # mean
     # test_lang_embeds = np.load(f"{args.data_dir}/test/lang_embeds.npy")
+    # train_traj_embeds /= 3
+    # test_traj_embeds /= 3 # idk if we also need to make this thing also mean norm 1
 
     print("Mean Norm of Traj Embeds:", np.linalg.norm(train_traj_embeds, axis=1).mean())
-    print("Mean Norm of Lang Embeds:", np.linalg.norm(train_lang_embeds, axis=1).mean())
+    print("Mean Std of Traj Embeds:", np.std(train_traj_embeds))
+    # print("Mean Norm of Lang Embeds:", np.linalg.norm(train_lang_embeds, axis=1).mean())
+    # print("Mean Norm of Trajs:", np.linalg.norm(np.linalg.norm(train_trajs, axis=1), axis=1).mean())
+    print("Mean Norm of Test Traj Embeds:", np.linalg.norm(test_traj_embeds, axis=1).mean())
+    print("Mean Std of Test Traj Embeds:", np.std(test_traj_embeds))
     print("Norm of feature values:", np.linalg.norm(train_feature_values, axis=1).mean())
+    print("Mean Std of Feature Values:", np.std(train_feature_values))
+    print("Norm of test feature values:", np.linalg.norm(test_feature_values, axis=1).mean())
+    print("Mean Std of Test Feature Values:", np.std(test_feature_values))
+
+    kde_train = KernelDensity(kernel='gaussian', bandwidth=0.1).fit(train_feature_values)
+    kde_test = KernelDensity(kernel='gaussian', bandwidth=0.1).fit(test_feature_values)
+    log_density_train = kde_train.score_samples(test_feature_values)
+    log_density_test = kde_test.score_samples(test_feature_values)
+    p_train = np.exp(log_density_train)
+    p_test = np.exp(log_density_test)
+    kl_divergence = entropy(p_train, p_test)
+    print("KLDiv: ", kl_divergence)
+    # exit()
 
     # Random init learned reward
     learned_reward = RewardFunc(feature_dim, 1)
@@ -653,28 +658,29 @@ def run(args):
         device,
         optimizer,
     )    
-
-    postfix_noisy = f"nn_active_{args.reward}_{args.lang}_noisy_{args.seed}"
-    
-    # Save the results in .npz files
+        
+    postfix_noisy = f"nn_active_{args.reward}_{args.lang}_lr_{args.lr}_dupe_traj_{args.dupe_traj}_num_iter_{args.num_iterations}"
+    postfix_noisy += "_other_feedback_" + str(args.num_other_feedback) + "_seed_" + str(args.seed)
+    postfix_noisy += f"_temp_{args.lang_temp}" + f"_lc_{args.lang_loss_coeff}" + f"_wd_{args.weight_decay}"
     save_results(args, noisy_results, test_ce=test_ce, postfix=postfix_noisy)
-    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(15, 5))
-    ax1.plot(noisy_results["cross_entropy"], label="Noisy")
-    ax1.plot([0, len(noisy_results["cross_entropy"])], [test_ce, test_ce], 'k--', label='Ground Truth')
-    ax1.set_xlabel("Number of Queries")
-    ax1.set_ylabel("Cross-Entropy")
-    ax1.set_title("Feedback, True Dist: Softmax")
-    ax1.legend()
 
-    ax2.plot(noisy_results["optimal_learned_rewards"], label="Noisy, Learned Reward")
-    ax2.plot(noisy_results["optimal_true_rewards"], label="True Reward", c="r")
-    ax2.set_xlabel("Number of Queries")
-    ax2.set_ylabel("Reward Value")
-    ax2.set_title("True Reward of Optimal Trajectory")
-    ax2.legend()
+    # fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(15, 5))
+    # ax1.plot(noisy_results["cross_entropy"], label="Noisy")
+    # ax1.plot([0, len(noisy_results["cross_entropy"])], [test_ce, test_ce], 'k--', label='Ground Truth')
+    # ax1.set_xlabel("Number of Queries")
+    # ax1.set_ylabel("Cross-Entropy")
+    # ax1.set_title("Feedback, True Dist: Softmax")
+    # ax1.legend()
 
-    plt.tight_layout()
-    plt.savefig(f"{args.true_reward_dir}/pref_learning/nn_active_{args.reward}_{args.lang}_noisy_{args.seed}.png")
+    # ax2.plot(noisy_results["optimal_learned_rewards"], label="Noisy, Learned Reward")
+    # ax2.plot(noisy_results["optimal_true_rewards"], label="True Reward", c="r")
+    # ax2.set_xlabel("Number of Queries")
+    # ax2.set_ylabel("Reward Value")
+    # ax2.set_title("True Reward of Optimal Trajectory")
+    # ax2.legend()
+
+    # plt.tight_layout()
+    # plt.savefig(f"{args.true_reward_dir}/pref_learning/nn_active_{args.reward}_{args.lang}_noisy_{args.seed}.png")
 
 if __name__ == "__main__":
     torch.set_num_threads(num_cpus)
@@ -789,6 +795,24 @@ if __name__ == "__main__":
         "--use-constant-temp",
         action="store_true",
         help="whether to use constant temperature",
+    )
+    parser.add_argument(
+        "--dupe-traj",
+        default="133",
+        type=int,
+        help="What trajectory to duplicate to replicate a massive dataset",
+    )
+    parser.add_argument(
+        "--max-feature-norm",
+        default="2.0",
+        type=float,
+        help="Max norm of the trajectory feature in our dataset",
+    )
+    parser.add_argument(
+        "--min-feature-norm",
+        default="2.0",
+        type=float,
+        help="Min norm of the trajectory feature in our dataset",
     )
     args = parser.parse_args()
     run(args)
