@@ -2,9 +2,9 @@ import numpy as np
 import torch
 import torch.nn as nn
 
-from lang_pref_learning.model.lstm import LSTMEncoder
-from lang_pref_learning.model.cnn import CNNEncoder
-from lang_pref_learning.model.visual_mlp import VisualMLP
+from lal.model.lstm import LSTMEncoder
+from lal.model.cnn import CNNEncoder
+from lal.model.visual_mlp import VisualMLP
 
 
 class NLTrajAutoencoder(nn.Module):
