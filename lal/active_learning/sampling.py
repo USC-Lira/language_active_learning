@@ -18,7 +18,7 @@ class EmbeddingSampler:
 			reward (type int): Specifies which sampling method will be used for sampling from reward weight space
 			lang (type int): Specifies which sampling method will be used for sampling from language space
 		'''
-		self.dim = dim
+		self.dim = dim # 512 for t5-small, 768 for
 
 		self.reward = reward
 		self.w_sampler = None
@@ -36,11 +36,14 @@ class EmbeddingSampler:
 		elif lang == 4: self.l_sampler = ep_l
 		assert self.l_sampler is not None
 
-		if reward == 3 and lang == 3: self.l_sampler = laplace_l_sampling
+		if reward == 3 and lang == 3: self.l_sampler = laplace_l_sampling # was doing this b4, but this isn't properly finding l's per w. it finds the l mode for all the w's
 	
 	# def sample(self, queries, initial_w=None, num_w_samples=200, burn_in_w=2000, thin_w=200, num_l_samples_per_w=100, burn_in_l=100, thin_l=5, seed=0): # 1-1
 	# def sample(self, queries, initial_w=None, num_w_samples=100, burn_in_w=1000, thin_w=50, num_l_samples_per_w=100, burn_in_l=100, thin_l=5, seed=0): # 2-1
-	def sample(self, queries, initial_w=None, num_w_samples=500, burn_in_w=100, thin_w=5, num_l_samples_per_w=1, burn_in_l=0, thin_l=1, seed=0): # 3-1
+	# def sample(self, queries, initial_w=None, num_w_samples=500, burn_in_w=100, thin_w=5, num_l_samples_per_w=1, burn_in_l=0, thin_l=1, seed=0): # 3-1 # used in metaworld
+	# def sample(self, queries, initial_w=None, num_w_samples=100, burn_in_w=100, thin_w=5, num_l_samples_per_w=1, burn_in_l=0, thin_l=1, seed=0): # 3-1 # testing for robosuite
+	def sample(self, queries, initial_w=None, num_w_samples=10, burn_in_w=0, thin_w=1, num_l_samples_per_w=5, burn_in_l=0, thin_l=1, seed=0): # 3-3 with laplace_l_sampling for robosuite
+	# def sample(self, queries, initial_w=None, num_w_samples=50, burn_in_w=0, thin_w=1, num_l_samples_per_w=100, burn_in_l=0, thin_l=1, seed=0): # 3-3 with laplace_l
 	# def sample(self, queries, initial_w=None, num_w_samples=100, burn_in_w=100, thin_w=5, num_l_samples_per_w=100, burn_in_l=100, thin_l=5, seed=0): # 4-1
 		'''
 		Using parallelization, sample from reward weight space
@@ -68,11 +71,13 @@ class EmbeddingSampler:
 		# 		feedback_embeds.append(queries[i][1])
 		# 	traj_embeds = np.stack(traj_embeds)
 		# 	feedback_embeds = np.stack(feedback_embeds)
-		traj_embeds = [np.zeros(512)]
-		feedback_embeds = [np.zeros(512)]
+		traj_embeds = [np.zeros(self.dim)]
+		feedback_embeds = [np.zeros(self.dim)]
 		for i in range(0, len(queries)):
 			traj_embeds.append(queries[i][0].reshape(-1))
 			feedback_embeds.append(queries[i][1].reshape(-1))
+		# for i in range(0, len(traj_embeds)):
+		# 	print(traj_embeds[i].shape)
 		traj_embeds = np.stack(traj_embeds)
 		feedback_embeds = np.stack(feedback_embeds)
 		if self.reward <= 2 and self.lang <= 2: # MC-MC
@@ -101,8 +106,18 @@ class EmbeddingSampler:
 				# l_samples.append(future.result())
 				l_samples.append(self.l_sampler(traj_embeds, w_samples[i], self.dim, num_l_samples_per_w * thin_l + burn_in_l, burn_in=burn_in_l, thin=thin_l, seed=seed))
 		else:
+			# start_time = time.time()
 			w_samples = self.w_sampler(traj_embeds, feedback_embeds, self.dim, num_w_samples) #  approx the distribution into gaussian, and sample from using torch
-			l_samples = self.l_sampler(traj_embeds, w_samples, self.dim, num_w_samples, num_l_samples_per_w)
+			# print("w sampling: ", time.time() - start_time)
+			# start_time = time.time()
+			
+			# l_samples = self.l_sampler(traj_embeds, w_samples, self.dim, num_w_samples, num_l_samples_per_w)
+			l_samples = self.l_sampler(traj_embeds, np.mean(w_samples, axis=0).reshape(1, -1), self.dim, num_w_samples, num_l_samples_per_w)
+			
+			# print("l sampling: ", time.time() - start_time)
+			# for i in range(num_w_samples):
+				# l_samples.append(self.l_sampler(traj_embeds, w_samples[i], self.dim, num_l_samples_per_w))
+			l_samples = np.stack(l_samples)
 		
 		if self.reward <= 2: w_samples = torch.from_numpy(np.stack(w_samples))
 		else: w_samples = torch.from_numpy(w_samples)
@@ -148,8 +163,8 @@ class WeightSampler:
 		'''
 		w_samples = []
 
-		traj_embeds = [np.zeros(512)]
-		feedback_embeds = [np.zeros(512)]
+		traj_embeds = [np.zeros(self.dim)]
+		feedback_embeds = [np.zeros(self.dim)]
 		for i in range(0, len(queries)):
 			traj_embeds.append(queries[i][0].reshape(-1))
 			feedback_embeds.append(queries[i][1].reshape(-1))
@@ -209,8 +224,8 @@ class LanguageSampler:
 		'''
 		l_samples = []
 
-		traj_embeds = [np.zeros(512)]
-		feedback_embeds = [np.zeros(512)]
+		traj_embeds = [np.zeros(self.dim)]
+		feedback_embeds = [np.zeros(self.dim)]
 		for i in range(0, len(queries)):
 			traj_embeds.append(queries[i][0].reshape(-1))
 			feedback_embeds.append(queries[i][1].reshape(-1))
