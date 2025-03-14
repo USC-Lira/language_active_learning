@@ -13,7 +13,7 @@ def next_traj_method(traj_embeds=None, lang_embeds=None, initial_w=None, active=
 
     # sampling from embedding space and reward space
     if active == 1:
-        assert traj_embeds is not None and lang_embeds is not None
+        assert traj_embeds is not None
         next_traj_iter = OpenIter(traj_embeds, lang_embeds, reward, lang, initial_w, seed)
 
     # sample from llm and reward space
@@ -87,9 +87,9 @@ class OpenIter:
         self.initial_w = torch.mean(w_samples, dim=0)
         # start_time = time.time()
         idx, ig = info(w_samples, l_samples, self.traj_embeds, self.prev_idxs)
+        # print(f"Info gain took: {time.time() - start_time} seconds")
         self.prev_idxs.append(idx)
         self.prev_idxs.sort()
-        # print(f"Info gain took: {time.time() - start_time} seconds")
         return w_samples, idx, ig
 
 class BALDIter:
