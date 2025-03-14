@@ -49,7 +49,7 @@ def init_weights_with_norm_one(m):
     if isinstance(m, nn.Linear):  # Check if the module is a linear layer
         weight_shape = m.weight.size()
         # Initialize weights with a standard method
-        weights = torch.normal(mean=0, std=0.001, size=weight_shape)
+        weights = torch.normal(mean=0, std=0.1, size=weight_shape) # 0.1 for rs, 0.001 for mw
         # Normalize weights to have a norm of 1
         # weights /= weights.norm(2)  # Adjust this if you need a different norm
         m.weight.data = weights
@@ -126,24 +126,24 @@ def load_data(args, split='train', DEBUG=False):
         print("len of trajs: " + str(len(trajs)))
 
     # add extra data
-    if args.env == "metaworld":
-        if split == "test":
-            trajs_extra = np.load(f"{args.data_dir_extra}/{split}/trajs.npy")
-            trajs_extra = trajs_extra[:, ::10, :]
-            # print(trajs.shape, trajs_extra.shape)
-            trajs = np.concatenate((trajs, trajs_extra))
+    # if args.env == "metaworld":
+    #     if split == "test":
+    #         trajs_extra = np.load(f"{args.data_dir_extra}/{split}/trajs.npy")
+    #         trajs_extra = trajs_extra[:, ::10, :]
+    #         # print(trajs.shape, trajs_extra.shape)
+    #         trajs = np.concatenate((trajs, trajs_extra))
 
-        traj_img_obs_extra = None
-        actions_extra = None
+    #     traj_img_obs_extra = None
+    #     actions_extra = None
 
-        if args.use_img_obs:
-            traj_img_obs_extra = np.load(f"{args.data_dir_extra}/{split}/traj_img_obs.npy")
-            actions_extra = np.load(f"{args.data_dir_extra}/{split}/actions.npy")
-            traj_img_obs_extra = traj_img_obs_extra[:, ::10, :]
-            actions_extra = actions_extra[:, ::10, :]
+    #     if args.use_img_obs:
+    #         traj_img_obs_extra = np.load(f"{args.data_dir_extra}/{split}/traj_img_obs.npy")
+    #         actions_extra = np.load(f"{args.data_dir_extra}/{split}/actions.npy")
+    #         traj_img_obs_extra = traj_img_obs_extra[:, ::10, :]
+    #         actions_extra = actions_extra[:, ::10, :]
 
-        traj_img_obs = np.concatenate((traj_img_obs, traj_img_obs_extra))
-        actions = np.concatenate((actions, actions_extra))
+    #     traj_img_obs = np.concatenate((traj_img_obs, traj_img_obs_extra))
+    #     actions = np.concatenate((actions, actions_extra))
         # print(trajs.shape, traj_img_obs.shape, actions.shape)
 
     # artificially increasing dataset from 134 trajs to 968 trajs
@@ -285,6 +285,7 @@ def lang_pref_learning(
             optimal_true_rewards.append(optimal_true_reward)
 
     print(f"Final CE: {cross_entropy}")
+    print(f"Final Reward: {optimal_learned_reward}")
     return_dict = {
         "cross_entropy": eval_cross_entropies,
         "learned_reward_norms": learned_reward_norms,
@@ -410,15 +411,15 @@ def run(args):
         test_feature_values = test_feature_values[:, :3]
 
         # extra
-        train_feature_values_extra = np.load(f"{args.data_dir_extra}/train/feature_vals.npy")
-        test_feature_values_extra = np.load(f"{args.data_dir_extra}/test/feature_vals.npy")
-        train_feature_values_extra = np.mean(train_feature_values_extra, axis=-1)
-        test_feature_values_extra = np.mean(test_feature_values_extra, axis=-1)
-        train_feature_values_extra = train_feature_values_extra[:, :3]
-        test_feature_values_extra = test_feature_values_extra[:, :3]
+        # train_feature_values_extra = np.load(f"{args.data_dir_extra}/train/feature_vals.npy")
+        # test_feature_values_extra = np.load(f"{args.data_dir_extra}/test/feature_vals.npy")
+        # train_feature_values_extra = np.mean(train_feature_values_extra, axis=-1)
+        # test_feature_values_extra = np.mean(test_feature_values_extra, axis=-1)
+        # train_feature_values_extra = train_feature_values_extra[:, :3]
+        # test_feature_values_extra = test_feature_values_extra[:, :3]
 
-        train_feature_values = np.concatenate((train_feature_values, train_feature_values_extra))
-        test_feature_values = np.concatenate((test_feature_values, test_feature_values_extra))
+        # train_feature_values = np.concatenate((train_feature_values, train_feature_values_extra))
+        # test_feature_values = np.concatenate((test_feature_values, test_feature_values_extra))
 
     all_features = np.concatenate([train_feature_values, test_feature_values], axis=0)
     feature_value_means = np.mean(all_features, axis=0)
@@ -528,7 +529,7 @@ def run(args):
     )
 
     # lots of trajs closest to mean, very few trajs far from it
-    if args.dupe_traj == -1 and args.env == "metaworld":
+    if args.dupe_traj == -1 and args.env == "robosuite":
         closest_n = 150
         farthest_n = 30
         mean_train_traj_embeds = np.mean(train_traj_embeds, axis=0)
@@ -539,9 +540,23 @@ def run(args):
         # print(train_trajs.shape, train_feature_values.shape, train_img_obs.shape, train_actions.shape, train_traj_embeds.shape)
         train_trajs = train_trajs[train_idxs]
         train_feature_values = train_feature_values[train_idxs]
-        train_img_obs = train_img_obs[train_idxs]
-        train_actions = train_actions[train_idxs]
+        # train_img_obs = train_img_obs[train_idxs]
+        # train_actions = train_actions[train_idxs]
         train_traj_embeds = train_traj_embeds[train_idxs]
+    if args.dupe_traj == -1 and args.env == "metaworld":
+        closest_n = 90
+        farthest_n = 10
+        mean_train_traj_embeds = np.mean(train_traj_embeds, axis=0)
+
+        closest_idcs = np.argsort(np.linalg.norm(train_traj_embeds - mean_train_traj_embeds, axis=1))[:closest_n]
+        farthest_idcs = np.argsort(-np.linalg.norm(train_traj_embeds - mean_train_traj_embeds, axis=1))[:farthest_n]
+        train_idxs = np.concatenate((closest_idcs, farthest_idcs))
+        train_trajs = train_trajs[train_idxs]
+        train_feature_values = train_feature_values[train_idxs]
+        train_traj_embeds = train_traj_embeds[train_idxs]
+        if args.use_img_obs:
+            train_img_obs = train_img_obs[train_idxs] 
+            train_actions = train_actions[train_idxs]
 
     # Initialize the dataset and dataloader
     train_lang_dataset = LangPrefDataset(train_trajs, train_feature_values)
@@ -616,7 +631,7 @@ def run(args):
     # main language learning part
     print("_____________")
     print("Active")
-    print(f"seed={args.true_reward_dir[-1]}")
+    print(f"reward={args.true_reward_dir[-1]}, seed={args.seed}")
     print(f"GT Cross Entropy: {test_ce}")
     noisy_results = lang_pref_learning(
         args,
@@ -636,6 +651,7 @@ def run(args):
         device,
     )    
 
+    # postfix_noisy = f"{args.active}_{args.reward}_{args.lang}_dupe_traj_{args.dupe_traj}_seed_{args.seed}_noiselessargmax"
     postfix_noisy = f"{args.active}_{args.reward}_{args.lang}_dupe_traj_{args.dupe_traj}_seed_{args.seed}"
     save_results(args, noisy_results, test_ce=test_ce, postfix=postfix_noisy)
     
