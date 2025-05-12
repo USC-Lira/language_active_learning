@@ -1,7 +1,7 @@
 import numpy as np
 import scipy
 
-def laplace_w(traj_embeds, feedback_embeds, latent_dim, num_w_samples):
+def laplace_w(traj_embeds, feedback_embeds, latent_dim, num_w_samples, initial_w):
     '''
     This is the Laplace Approximation method, approximating the reward weight space as a gaussian, and then direct sampling from the approximation.
     parameters:
@@ -15,43 +15,37 @@ def laplace_w(traj_embeds, feedback_embeds, latent_dim, num_w_samples):
     feedback_embeds = feedback_embeds[1:]
 
     def logp(i, w):
-        feedback_embed = feedback_embeds[i].reshape(1, 512)
-        diff = (w - traj_embeds[i]).reshape(512, 1)
-        return np.dot(feedback_embed, diff).item() # new model propto BT model using cosine similarity
-        # diff = w - traj_embeds[i]
-        # total_prob = np.exp(np.dot(feedback_embeds, diff))
-        # return np.log(total_prob[i]/np.sum(total_prob))
-
-    def logq(i, w):
-        return np.log(1/(1 + np.exp(-(w @ feedback_embeds[i]))))
-        # total_prob = np.exp(w.reshape(512 ,) @ (np.tile(traj_embeds[i], [traj_embeds.shape[0], 1]) + feedback_embeds).reshape(-1, 512).T) # size 20
-        # return np.log(total_prob[i]/np.sum(total_prob))
+        feedback_embed = feedback_embeds[i].reshape(1, -1)
+        diff = (w - traj_embeds[i]).reshape(-1, 1)
+        return np.dot(feedback_embed, diff).item()
 	
     def logprob(w):
         if np.linalg.norm(w) > 1: return -100
         log_prob = np.float32(0.)
         for i in range(traj_embeds.shape[0]): 
             log_prob += logp(i, w)
-            # log_prob += logq(i, w)
         return log_prob
-
+        
     def neg_logprob(w):
         return -logprob(w)
+    
+    def prob_jacobian(w):
+        return -np.sum(feedback_embeds, axis=0)
 
     def constraint_function(w):
         return 1 - np.linalg.norm(w)
+    
+    def constraint_jacobian(w):
+        norm = np.linalg.norm(w)
+        if norm == 0:
+            return np.zeros_like(w)
+        return -w / norm
 
-    constraints = {'type': 'ineq', 'fun': constraint_function}
-    solution = scipy.optimize.minimize(neg_logprob, np.zeros(latent_dim), method='SLSQP', constraints=constraints) # optimize using SLSQP to get the true mode
-    solution = scipy.optimize.minimize(neg_logprob, solution.x, method='L-BFGS-B', options={"maxiter":1}) # optimize using L-BFGS-B to get the approx hessian
-    # solution = scipy.optimize.minimize(neg_logprob, solution.x, method='L-BFGS-B', options={"maxiter":10}) # optimize using L-BFGS-B to get the approx hessian
-    # https://github.com/rickecon/StructEst_W17/issues/26
-    mode = solution.x / np.maximum(np.linalg.norm(solution.x), 1e-8)
-    # mode = solution.x
-    inv_hess = solution.hess_inv.todense() * 1e-2
-    # inv_hess = solution.hess_inv.todense() * 1e-10
-    # lambs = np.linalg.norm(inv_hess) # L2 regularization
-    # inv_hess += lambs * np.eye(latent_dim)
+    constraints = {'type': 'ineq', 'fun': constraint_function, 'jac': constraint_jacobian}
+    solution = scipy.optimize.minimize(neg_logprob, initial_w, method='SLSQP', jac=prob_jacobian, constraints=constraints) # optimize using SLSQP to get the true mode
+    mode = solution.x
+    solution = scipy.optimize.minimize(neg_logprob, mode, method='L-BFGS-B', options={"maxiter":1}) # optimize using L-BFGS-B to get the approx hessian
+    inv_hess = solution.hess_inv.todense() * 5e-2
     w_samples = np.random.multivariate_normal(np.nan_to_num(mode), np.nan_to_num(inv_hess), size=num_w_samples)
     return w_samples
 
@@ -67,14 +61,14 @@ def laplace_l(traj_embeds, w, latent_dim, num_l_samples):
         l_samples (type torch.tensor): the set of l samples
     '''
     traj_embeds = traj_embeds[1:]
-    feedback_embeds = feedback_embeds[1:]
 
     def logp(i, l):
-        diff = (w - traj_embeds[i]).reshape(512, 1).astype(np.float32)
-        return np.dot(l.reshape(1, 512), diff).item() # new model propto BT model using cosine similarity
+        diff = (w - traj_embeds[i]).reshape(-1, 1).astype(np.float32)
+        # diff = (w - traj_embeds[i]/2).reshape(512, 1).astype(np.float32)
+        return np.dot(l.reshape(1, -1), diff).item() # new model propto BT model using cosine similarity
 
     def logprob(l):
-        if np.linalg.norm(l) > 1: return -100
+        # if np.linalg.norm(l) > 1: return -100
         log_prob = np.float32(0.)
         for i in range(traj_embeds.shape[0]): 
             log_prob += logp(i, l)
@@ -87,11 +81,11 @@ def laplace_l(traj_embeds, w, latent_dim, num_l_samples):
         return 1 - np.linalg.norm(l)
 
     constraints = {'type': 'ineq', 'fun': constraint_function}
-    solution = scipy.optimize.minimize(neg_logprob, np.zeros(latent_dim), method='SLSQP', constraints=constraints, options={"maxiter":5}) # optimize using SLSQP to get the true mode
+    solution = scipy.optimize.minimize(neg_logprob, np.zeros(latent_dim), method='SLSQP', constraints=constraints) # optimize using SLSQP to get the true mode
     solution = scipy.optimize.minimize(neg_logprob, solution.x, method='L-BFGS-B', options={"maxiter":1}) # optimize using L-BFGS-B to get the approx hessian
-    mode = solution.x / np.maximum(np.linalg.norm(solution.x), 1e-8)
-    inv_hess = solution.hess_inv.todense() * 1e-2
-    l_samples = np.random.multivariate_normal(np.nan_to_num(mode), np.nan_to_num(inv_hess), size=num_l_samples)
+    inv_hess = solution.hess_inv.todense() * 1e-4
+    l_samples = np.random.multivariate_normal(np.nan_to_num(solution.x), np.nan_to_num(inv_hess), size=num_l_samples)
+    print("l: ", np.linalg.norm(solution.x), np.linalg.norm(inv_hess))
     return l_samples
 
 def laplace_l_sampling(traj_embeds, w_samples, latent_dim, num_w_samples, num_l_samples):
@@ -106,24 +100,38 @@ def laplace_l_sampling(traj_embeds, w_samples, latent_dim, num_w_samples, num_l_
         l_samples (type torch.tensor): the set of l samples
     '''
     traj_embeds = traj_embeds[1:]
+    embed_diff = (w_samples.reshape(w_samples.shape[0], 1, w_samples.shape[1]) - traj_embeds.reshape(1, traj_embeds.shape[0], traj_embeds.shape[1]))
 
     def logprob(l):
         if np.linalg.norm(l) > 1: return -100
-        embed_diff = (w_samples.reshape(w_samples.shape[0], 1, w_samples.shape[1]) - traj_embeds.reshape(1, traj_embeds.shape[0], traj_embeds.shape[1])).reshape(-1, w_samples.shape[1])
         align = embed_diff @ l
         return np.sum(align)
 
     def neg_logprob(l):
         return -logprob(l)
 
+    def prob_jacobian(l):
+        return -np.sum(embed_diff, axis=(0, 1))
+
     def constraint_function(l):
         return 1 - np.linalg.norm(l)
+    
+    def constraint_jacobian(l):
+        norm = np.linalg.norm(l)
+        if norm == 0:
+            return np.zeros_like(l)
+        return -l / norm
 
-    constraints = {'type': 'ineq', 'fun': constraint_function}
-    solution = scipy.optimize.minimize(neg_logprob, np.zeros(latent_dim), method='SLSQP', constraints=constraints, options={"maxiter":5}) # optimize using SLSQP to get the true mode
-    solution = scipy.optimize.minimize(neg_logprob, solution.x, method='L-BFGS-B', options={"maxiter":1}) # optimize using L-BFGS-B to get the approx hessian
-    mode = solution.x / np.maximum(np.linalg.norm(solution.x), 1e-8)
-    inv_hess = solution.hess_inv.todense() * 1e-2
+    if len(traj_embeds) == 0: # uninformed prior
+        guess = np.random.rand(latent_dim)
+    else: # informed prior
+        guess = embed_diff.mean(axis=1).mean(axis=0)
+    guess = (guess / np.linalg.norm(guess)) * 0.95
+    constraints = {'type': 'ineq', 'fun': constraint_function, 'jac': constraint_jacobian}
+    solution = scipy.optimize.minimize(neg_logprob, guess, method='SLSQP', jac=prob_jacobian, constraints=constraints) # optimize using SLSQP to get the true mode
+    mode = solution.x
+    solution = scipy.optimize.minimize(neg_logprob, mode, method='L-BFGS-B', options={"maxiter":1}) # optimize using L-BFGS-B to get the approx hessian
+    inv_hess = solution.hess_inv.todense() * 5e-2
     l_samples = np.random.multivariate_normal(np.nan_to_num(mode), np.nan_to_num(inv_hess), size=num_w_samples * num_l_samples)
     return l_samples.reshape(num_w_samples, num_l_samples, -1)
 

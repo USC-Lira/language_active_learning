@@ -19,8 +19,8 @@ def mh(traj_embeds, feedback_embeds, latent_dim, prev_w, step_size=0.001, num_w_
             w (type torch.tensor): the next sampled reward weight w
         '''
         def logp(i, w):
-            feedback_embed = feedback_embeds[i].reshape(1, 512)
-            diff = (w - traj_embeds[i]).reshape(512, 1)
+            feedback_embed = feedback_embeds[i].reshape(1, -1)
+            diff = (w - traj_embeds[i]).reshape(-1, 1)
             # return (feedback_embed @ (w - traj_embed)).item() # new model propto BT model using cosine similarity
             return np.dot(feedback_embed, diff).item() # new model propto BT model using cosine similarity
         
@@ -58,8 +58,8 @@ def mh(traj_embeds, feedback_embeds, latent_dim, prev_w, step_size=0.001, num_w_
             torch.stack(l_samples) (type torch.tensor): the set of l samples
         '''
         def logp(i, l):
-            diff = (w - traj_embeds[i]).reshape(512, 1).astype(np.float32)
-            return np.dot(l.reshape(1, 512), diff).item() # new model propto BT model using cosine similarity
+            diff = (w - traj_embeds[i]).reshape(-1, 1).astype(np.float32)
+            return np.dot(l.reshape(1, -1), diff).item() # new model propto BT model using cosine similarity
 
         def logprob(l):
             if np.linalg.norm(l) > 1: return -np.inf
@@ -115,8 +115,8 @@ def mh_w(traj_embeds, feedback_embeds, latent_dim, prev_w, step_size=0.03, seed=
     
     # np.random.seed(seed)
     def logp(i, w):
-        feedback_embed = feedback_embeds[i].reshape(1, 512)
-        diff = (w - traj_embeds[i]).reshape(512, 1)
+        feedback_embed = feedback_embeds[i].reshape(1, -1)
+        diff = (w - traj_embeds[i]).reshape(-1, 1)
         # return (feedback_embed @ (w - traj_embed)).item() # new model propto BT model using cosine similarity
         return np.dot(feedback_embed, diff).item() # new model propto BT model using cosine similarity
 	
@@ -157,8 +157,8 @@ def mh_l(traj_embeds, w, latent_dim, num_l_samples, step_size=0.03, burn_in=1000
     '''
     # np.random.seed(seed)
     def logp(i, l):
-        diff = (w - traj_embeds[i]).reshape(512, 1).astype(np.float32)
-        return np.dot(l.reshape(1, 512), diff).item() # new model propto BT model using cosine similarity
+        diff = (w - traj_embeds[i]).reshape(-1, 1).astype(np.float32)
+        return np.dot(l.reshape(1, -1), diff).item() # new model propto BT model using cosine similarity
 
     def logprob(l):
         if np.linalg.norm(l) > 1: return -np.inf

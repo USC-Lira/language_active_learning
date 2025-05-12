@@ -52,6 +52,28 @@ def ep_w_dimension(traj_embeds, feedback_embeds, latent_dim, num_w_samples):
         w_samples = np.random.multivariate_normal(mu, cov, num_w_samples).reshape(num_w_samples, latent_dim)
         return w_samples
 
+    traj_embeds = traj_embeds[1:]
+    feedback_embeds = feedback_embeds[1:]
+    # traj_embeds = traj_embeds[-1:]
+    # feedback_embeds = feedback_embeds[-1:]
+
+    # tmp_traj = []
+    # tmp_feedback = []
+    # for idx in range(traj_embeds.shape[0]):
+        # print(np.linalg.norm(feedback_embeds[idx]), np.linalg.norm(traj_embeds[idx]))
+        # elt = feedback_embeds[idx].reshape(latent_dim, 1) @ feedback_embeds[idx].reshape(1, latent_dim)
+        # print(np.linalg.norm(elt), np.std(elt), np.sum(elt))
+        # if np.sum(elt) >= 1:
+    #     if idx != 3:
+    #     # if abs(feedback_embeds[idx] @ traj_embeds[idx]) < 3: 
+    #         tmp_traj.append(traj_embeds[idx])
+    #         tmp_feedback.append(feedback_embeds[idx])
+
+    # tmp_traj = np.array(tmp_traj)
+    # tmp_feedback = np.array(tmp_feedback)
+    # traj_embeds = tmp_traj
+    # feedback_embeds = tmp_feedback
+
     def exponential_decay_damping(alpha_0, K, min_alpha):
         """
         Compute the exponentially decreasing damping factors.
@@ -68,82 +90,130 @@ def ep_w_dimension(traj_embeds, feedback_embeds, latent_dim, num_w_samples):
         damping_factors = alpha_0 * np.exp(-decay_rate * np.arange(K))
         return damping_factors
 
-    # def f(x, mu, cov, psi, tau):
-    #     return scipy.stats.norm.pdf(x, mu, cov) * np.exp(x - psi @ tau)
-    def f(x, mu, cov):
-        return scipy.stats.norm.pdf(x, mu, cov) * np.exp(x)
+    def f(x, mu, cov, psi, tau):
+        # w = psi.reshape(-1, 1) @ np.array([[x]])
+        # if np.linalg.norm(psi.reshape(-1, 1) @ np.array([[x]])) > 1: return 0
+        return scipy.stats.norm.pdf(x, mu, cov) * np.exp(x - psi @ tau)
+        # return 100*scipy.stats.norm.pdf(x, mu, cov) * np.exp(x - psi @ tau)
+
+        # if abs(x) > 2: return 0
+        # return scipy.stats.norm.pdf(x, mu, cov) * np.exp(x)
+
+    # def f(x, mu, cov):
+    #     return scipy.stats.norm.pdf(x, mu, cov) * np.exp(x)
 
     # following https://www.jmlr.org/papers/volume24/23-0104/23-0104.pdf page 7, algorithm 1
     # https://www.youtube.com/watch?v=0tomU1q3AdY resource
 
-    traj_embeds = traj_embeds[1:]
-    feedback_embeds = feedback_embeds[1:]
-
     num_iterations = 2
-    eta = 0.5 # step size
-    # eta = 0.1 # step size
-    # alpha = 0.01
-    # alpha = min(0.2, 1 / traj_embeds.shape[0])
+    # num_iterations = traj_embeds.shape[0]+1
+    eta_0 = 0.5 # step size
+    eta = 0.5
     alpha_0 = 0.5
-    alphas = exponential_decay_damping(alpha_0, traj_embeds.shape[0], 0.01)
+    min_alpha = 0.5
+    min_eta = 0.01
+    alphas = [min_alpha] + [min_alpha] * (traj_embeds.shape[0] - 1)
+    num_queries = traj_embeds.shape[0]
+    # num_queries = min(3, traj_embeds.shape[0])
+    # alphas = exponential_decay_damping(alpha_0, traj_embeds.shape[0], min_alpha)
+    # etas = exponential_decay_damping(eta_0, traj_embeds.shape[0], min_eta)
     max_Q_delta = 0
     max_r_delta = 0
-    Q_k = [np.eye(1) for q in range(traj_embeds.shape[0])]
-    r_k = [np.zeros(1) for q in range(traj_embeds.shape[0])]
-    Q_dot = np.sum([feedback_embeds[q].reshape(latent_dim, 1) @ Q_k[q] @ feedback_embeds[q].reshape(1, latent_dim) for q in range(feedback_embeds.shape[0])], axis=0) # (512, 512)
-    r_dot = np.sum([feedback_embeds[q].reshape(latent_dim, 1) @ r_k[q] for q in range(feedback_embeds.shape[0])], axis=0) # (512,)
+    Q_k = [np.eye(1) for q in range(num_queries)]
+    r_k = [np.zeros(1) for q in range(num_queries)]
+    Q_dot = np.sum([feedback_embeds[q].reshape(latent_dim, 1) @ Q_k[q] @ feedback_embeds[q].reshape(1, latent_dim) for q in range(num_queries)], axis=0) # (512, 512)
+    r_dot = np.sum([feedback_embeds[q].reshape(latent_dim, 1) @ r_k[q] for q in range(num_queries)], axis=0) # (512,)
 
-    for i in range(num_iterations):
+    # print(np.linalg.norm(feedback_embeds, axis=1))
+    # initial_sigma = np.linalg.pinv(Q_dot) # (512, 512)
+    # print(f"Norm of initial mu is: {np.linalg.norm(initial_sigma @ r_dot)}, norm of initial sigma is: {np.linalg.norm(initial_sigma)}")
+    # curr_deltas = np.array([0] * traj_embeds.shape[0])
+    limit = 2
+    # print(alphas)
+
+    # for i in range(num_iterations):
+    i = 0
+    while i < 1:
         Sigma_dot = np.linalg.pinv(Q_dot) # (512, 512)
         mu_dot = Sigma_dot @ r_dot # (512,)
         curr_Q_delta = 0
         curr_r_delta = 0
-        # alpha = alphas[min(i, traj_embeds.shape[0]-1)]
-        for q in range(traj_embeds.shape[0]):
-            alpha = alphas[min(i, traj_embeds.shape[0]-1)]
+        alpha = alphas[min(i, traj_embeds.shape[0]-1)]
+        # eta = etas[min(i, traj_embeds.shape[0]-1)]
+        # if (np.sum(Sigma_dot) < 1): break
+        # if (np.linalg.norm(Sigma_dot) < 1.5): break
+        for q in range(num_queries):
             # alpha = alphas[q]
+            # print(q, feedback_embeds[q] @ traj_embeds[q])
+            # if q == 3 or q == 7: continue
 
             # EP Downdate
             Sigma_star = feedback_embeds[q].reshape(1, latent_dim) @ Sigma_dot @ feedback_embeds[q].reshape(latent_dim, 1) # (1,)
+            # print(Sigma_star, np.linalg.inv(Q_k[q]))
             mu_star = feedback_embeds[q].reshape(1, latent_dim) @ mu_dot # (1,)
             Q_star = np.linalg.inv(Sigma_star) # (1,)
             r_star = Q_star @ mu_star # (1,)
+            # print(i, q, Q_star, Q_k[q])
             Q_cav = Q_star - eta * Q_k[q]
             r_cav = r_star - eta * r_k[q]
-            # Sigma_cav = np.abs(np.linalg.inv(Q_cav)) # i really don't like adding this abs here
+            # Sigma_cav = 1e-8
+            # for k in range(10):
+            #     if Sigma_cav >= 1e-3: break
+            #     eta = eta * 0.9
+            #     Q_cav = Q_star - eta * Q_k[q]
+            #     Sigma_cav = np.linalg.inv(Q_cav)
             Sigma_cav = np.linalg.inv(Q_cav)
-            # print(Sigma_cav)
             mu_cav = Sigma_cav @ r_cav
 
             # Tilted distribution inference
-            # zero_mom = np.maximum(scipy.integrate.quad(f, -1, 1, args=(mu_cav.item(), Sigma_cav.item(), feedback_embeds[q], traj_embeds[q]))[0], 1e-8)
-            zero_mom = np.maximum(scipy.integrate.quad(f, -1, 1, args=(mu_cav.item(), Sigma_cav.item()))[0], 1e-8)
-            # first_fxn = lambda x, mu, cov, psi, tau: f(x, mu, cov, psi, tau) * x
-            first_fxn = lambda x, mu, cov: f(x, mu, cov) * x
-            # first_mom = scipy.integrate.quad(first_fxn, -1, 1, args=(mu_cav.item(), Sigma_cav.item(), feedback_embeds[q], traj_embeds[q]))[0]
-            first_mom = scipy.integrate.quad(first_fxn, -1, 1, args=(mu_cav.item(), Sigma_cav.item()))[0]
-            # second_fxn = lambda x, mu, cov, psi, tau: f(x, mu, cov, psi, tau) * x**2
-            second_fxn = lambda x, mu, cov: f(x, mu, cov) * x**2
-            # second_mom = scipy.integrate.quad(second_fxn, -1, 1, args=(mu_cav.item(), Sigma_cav.item(), feedback_embeds[q], traj_embeds[q]))[0]
-            second_mom = scipy.integrate.quad(second_fxn, -1, 1, args=(mu_cav.item(), Sigma_cav.item()))[0]
-            # Sigma_tilted = np.array(np.abs(second_mom / zero_mom - (first_mom / zero_mom) * (first_mom / zero_mom))).reshape(1, 1) # i really don't like adding this abs here
+            zero_mom = np.maximum(scipy.integrate.quad(f, -limit, limit, args=(mu_cav.item(), Sigma_cav.item(), feedback_embeds[q], traj_embeds[q]))[0], 1e-8)
+            # zero_mom = np.maximum(scipy.integrate.quad(f, -limit, limit, args=(mu_cav.item(), Sigma_cav.item()))[0], 1e-8)
+            # if zero_mom == 1e-8: zero_mom = np.exp(mu_cav.item()) # delta fxn approximation
+            # print(zero_mom)
+            first_fxn = lambda x, mu, cov, psi, tau: f(x, mu, cov, psi, tau) * x
+            # first_fxn = lambda x, mu, cov: f(x, mu, cov) * x
+            first_mom = scipy.integrate.quad(first_fxn, -limit, limit, args=(mu_cav.item(), Sigma_cav.item(), feedback_embeds[q], traj_embeds[q]))[0]
+            # first_mom = scipy.integrate.quad(first_fxn, -limit, limit, args=(mu_cav.item(), Sigma_cav.item()))[0]
+            second_fxn = lambda x, mu, cov, psi, tau: f(x, mu, cov, psi, tau) * x**2
+            # second_fxn = lambda x, mu, cov: f(x, mu, cov) * x**2
+            second_mom = scipy.integrate.quad(second_fxn, -limit, limit, args=(mu_cav.item(), Sigma_cav.item(), feedback_embeds[q], traj_embeds[q]))[0]
+            # second_mom = scipy.integrate.quad(second_fxn, -limit, limit, args=(mu_cav.item(), Sigma_cav.item()))[0]
+            # if zero_mom == 1e-8:
+            #     curr_deltas[q] = 1
+            #     # print("delta: SKIPPED")
+            #     continue
             Sigma_tilted = np.array(max(second_mom / zero_mom - (first_mom / zero_mom) * (first_mom / zero_mom), 1e-8)).reshape(1, 1)
             mu_tilted = np.array(first_mom / zero_mom).reshape(1,)
+
+            # add noise
+            # sigma_noise = np.random.normal(0, 1e-6)
+            # mu_noise = np.random.normal(0, 1e-6)
+            # Sigma_tilted += sigma_noise
+            # mu_tilted += mu_noise
+            # print(sigma_noise, mu_noise)
 
             # EP update
             Q_tilted = np.linalg.inv(Sigma_tilted)
             r_tilted = Q_tilted @ mu_tilted
-            # Q_tilde = (1 - alpha) * Q_k[q] + (alpha/eta) * (Q_tilted - Q_cav)
-            Q_tilde = max((1 - alpha) * Q_k[q] + (alpha/eta) * (Q_tilted - Q_cav), np.array([[1e-8]]))
+            Q_tilde = (1 - alpha) * Q_k[q] + (alpha/eta) * (Q_tilted - Q_cav)
             r_tilde = (1 - alpha) * r_k[q] + (alpha/eta) * (r_tilted - r_cav)
+            # print(np.sum(feedback_embeds[q].reshape(latent_dim, 1) @ (Q_tilde - Q_k[q]) @ feedback_embeds[q].reshape(1, latent_dim)), np.sum(feedback_embeds[q].reshape(latent_dim, 1) @ (r_tilde - r_k[q])))
+            # print(Q_tilde, Q_k[q], r_tilde, r_k[q])
+            # print(Q_tilted, Q_cav, r_tilted, r_cav)
+            # print(Q_k[q].copy(), Q_tilde.copy(), r_k[q].copy(), r_tilde.copy())
             Q_dot += feedback_embeds[q].reshape(latent_dim, 1) @ (Q_tilde - Q_k[q]) @ feedback_embeds[q].reshape(1, latent_dim)
             r_dot += feedback_embeds[q].reshape(latent_dim, 1) @ (r_tilde - r_k[q])
+            # print(np.linalg.norm(np.linalg.pinv(Q_dot)), np.std(np.linalg.pinv(Q_dot)))
+            # if q == 3: continue
             Q_k_tmp = Q_k[q].copy()
             r_k_tmp = r_k[q].copy()
             Q_k[q] = Q_tilde.copy()
             r_k[q] = r_tilde.copy()
-            curr_Q_delta = max(curr_Q_delta, np.linalg.norm(Q_k_tmp - Q_k[q]))
-            curr_r_delta = max(curr_r_delta, np.linalg.norm(r_k_tmp - r_k[q]))
+            # print(Q_tilde, r_tilde)
+            # curr_Q_delta = max(curr_Q_delta, np.linalg.norm(Q_k_tmp - Q_k[q]))
+            # curr_r_delta = max(curr_r_delta, np.linalg.norm(r_k_tmp - r_k[q]))
+            # curr_deltas[q] = 0
+            # print("delta: ", i, q, curr_Q_delta, curr_r_delta)
         # Q_dot = (Q_dot + Q_dot.T) / 2 # pretty much the matrix is a transpose of itself, it's just probably not equal due to floating point error
         # min_eig = np.min(np.real(np.linalg.eigvals(Q_dot)))
         # if min_eig < 0:
@@ -154,22 +224,31 @@ def ep_w_dimension(traj_embeds, feedback_embeds, latent_dim, num_w_samples):
         #     max_r_delta = curr_r_delta
         # else:
         #     # print(max_Q_delta, curr_Q_delta, max_r_delta, curr_r_delta)
-        #     if curr_Q_delta < 0.05 * max_Q_delta and curr_r_delta < 0.05 * max_r_delta: break
+        #     # if np.linalg.norm(np.linalg.norm(np.linalg.pinv(Q_dot) @ r_dot)) <= 1 and np.linalg.norm(np.linalg.pinv(Q_dot)) <= 1:
+        #     if np.linalg.norm(np.linalg.norm(np.linalg.pinv(Q_dot) @ r_dot)) <= 1:
+        #         print("Converged Cov Norm")
+        #         break
+        #     # if curr_Q_delta < 0.05 * max_Q_delta and curr_r_delta < 0.05 * max_r_delta: 
+        #     #     print("Converged Delta")
+        #     #     break
+        #     if all(curr_deltas == 1):
+        #         print("All Cov Low")
+        #         break
+        i += 1
 
-    final_sigma = np.linalg.inv(Q_dot)
+    print(f"Took {i+1} iterations")
+    final_sigma = np.linalg.pinv(Q_dot)
+    # print(f"Final_sigma: {np.linalg.norm(final_sigma)}")
     final_sigma = (final_sigma + final_sigma.T) / 2
     min_eig = np.min(np.real(np.linalg.eigvals(final_sigma)))
     if min_eig < 0:
         final_sigma -= (min_eig - 1e-8) * np.eye(*final_sigma.shape)
     final_mu = final_sigma @ r_dot
-    final_sigma /= (np.linalg.norm(final_sigma))
-    final_sigma *= 1e-8
-    # lambs = np.linalg.norm(final_sigma) # L2 regularization
-    # final_sigma += lambs * np.eye(latent_dim)
-    # print(f"Took {i} iterations")
-    # print(np.linalg.norm(final_sigma))
-    # print(np.linalg.norm(final_sigma), np.linalg.norm(r_dot)) # sometimes r_dot goes to inf # fixed
+    # print(np.sum(final_sigma), np.sum(final_mu))
+    # print(f"Final_sigma: {np.linalg.norm(final_sigma)}, Q_dot: {np.linalg.norm(Q_dot)}, r_dot: {np.linalg.norm(r_dot)}")
+    final_sigma /= (np.linalg.norm(final_sigma)) / 1e-2
     final_mu /= np.maximum(np.linalg.norm(final_mu), 1e-8)
+    # print(f"Norm of mu is: {np.linalg.norm(final_mu)}, norm of sigma is: {np.linalg.norm(final_sigma)}")
     w_samples = np.random.multivariate_normal(final_mu, final_sigma, num_w_samples)
     return w_samples
 
@@ -190,70 +269,50 @@ def ep_w(traj_embeds, feedback_embeds, latent_dim, num_w_samples):
         w_samples = np.random.multivariate_normal(mu, cov, num_w_samples).reshape(num_w_samples, latent_dim)
         return w_samples
 
-    @njit
     def sample_hybrid(mu, cov, tau, psi):
-        sd = np.sqrt(np.maximum(cov, 1e-8))
-        def f(w): # the tilted/hybrid distribution
-            return multivariate_normal_pdf(w, mu, sd) * np.exp((psi @ (w.astype(np.float32)-tau)).item())
+        def constraint_function(w):
+            return 1 - np.linalg.norm(w)
 
-        num_hybrid_samples = 100
-        thin = 1
-        burn_in = 0
-        step_size = 0.001
-        hybrid_samples = np.array([0.])
-        h = np.zeros(latent_dim)
-        for _ in range(num_hybrid_samples * thin + burn_in):
-            # Propose a new sample, hoping its within the bounds [-1, 1]
-            h_new = h + np.random.uniform(-step_size, step_size, latent_dim)
+        def neg_logprob(w): # the tilted/hybrid distribution
+            return -(multivariate_normal_pdf(w, mu, cov) * np.exp((psi @ (w.astype(np.float32)-tau)).item()))
 
-            # Calculate acceptance probability
-            current_log_prob = np.maximum(f(h), 1e-8)
-            new_log_prob = f(h_new)
-            acceptance_prob = new_log_prob / current_log_prob
-            
-            # Accept or reject the new sample
-            if np.random.rand(1) < acceptance_prob: h = h_new
-            if _ >= burn_in and _ % thin == 0: hybrid_samples = np.append(hybrid_samples, h)
-        return hybrid_samples
+        constraints = {'type': 'ineq', 'fun': constraint_function}
+        solution = scipy.optimize.minimize(neg_logprob, np.zeros(latent_dim), method='SLSQP', constraints=constraints) # optimize using SLSQP to get the true mode
+        solution = scipy.optimize.minimize(neg_logprob, solution.x, method='L-BFGS-B', options={"maxiter":1}) # optimize using L-BFGS-B to get the approx hessian
+        mode = solution.x / np.maximum(np.linalg.norm(solution.x), 1e-8)
+        inv_hess = solution.hess_inv.todense() * 1e-2
+        return np.nan_to_num(mode), np.nan_to_num(inv_hess)
+
+    traj_embeds = traj_embeds[1:]
+    feedback_embeds = feedback_embeds[1:]
 
     num_iterations = 1
     A = np.stack([np.eye(latent_dim) for q in range(traj_embeds.shape[0])]) # total precision
     r = np.stack([np.zeros(latent_dim) for q in range(traj_embeds.shape[0])]) # total shift
-    # damping = 0.1
+    eta = 0.5
+    alpha = 0.5
 
-    @njit
-    def ep_iter():
+    for i in range(num_iterations):
         A_clone = np.copy(A)
         r_clone = np.copy(r)
-        for i in range(num_iterations):
-            # A_clone = np.copy(A)
-            # r_clone = np.copy(r)
-            for q in range(traj_embeds.shape[0]):
-                # https://www.youtube.com/watch?v=0tomU1q3AdY resource
-                # natural parameters of cavity distribution
-                A_cav = np.sum(A_clone, axis=0) - A_clone[q] # cavity precision
-                r_cav = np.sum(r_clone, axis=0) - r_clone[q] # cavity shift
-                cov_cav = np.linalg.inv(A_cav) # cavity covariance, which is just the inverse of cavity precision
-                mu_cav = cov_cav @ r_cav # cavity mu, which is just the covariance * cavity shift
+        for q in range(traj_embeds.shape[0]):
+            # https://www.youtube.com/watch?v=0tomU1q3AdY resource
+            # https://jmlr.org/papers/volume21/18-817/18-817.pdf , page 32
+            # natural parameters of cavity distribution
+            A_cav = np.sum(A, axis=0) - eta * A[q] # cavity precision
+            r_cav = np.sum(r, axis=0) - eta * r[q] # cavity shift
+            Sigma_cav = np.linalg.pinv(A_cav) # cavity covariance, which is just the inverse of cavity precision
+            mu_cav = Sigma_cav @ r_cav # cavity mu, which is just the covariance * cavity shift
 
-                # get tilted/hybrid
-                hybrid_samples = sample_hybrid(mu_cav, cov_cav, traj_embeds[q], feedback_embeds[q])[1:].reshape(-1, latent_dim)
-                mu_tilted = np.sum(hybrid_samples, axis=0) / hybrid_samples.shape[0] #numba doesn't support .mean() w/ any args
-                cov_tilted =  np.cov(hybrid_samples, rowvar=False)
+            # get tilted/hybrid
+            mu_tilted, cov_tilted = sample_hybrid(mu_cav, Sigma_cav, traj_embeds[q], feedback_embeds[q])
 
-                # change back to natural params and update approx
-                # A_clone[q] = np.linalg.inv(cov_tilted) - A_cav # new precision; feels weird to subtract cav but u do apparently
-                A_clone[q] = np.linalg.pinv(cov_tilted) - A_cav # new precision; feels weird to subtract cav but u do apparently
-                # r_clone[q] = A_clone[q] @ mu_tilted - r_cav # new shift
-                r_clone[q] = A_clone[q] @ mu_tilted - r_cav # new shift
-            # A = np.copy(A_clone)
-            # r = np.copy(r_clone)
-        return A_clone, r_clone
+            # change back to natural params and update approx
+            A[q] = alpha * ((1 / eta) * (np.linalg.inv(cov_tilted) - A_cav) - A[q]) # new precision;
+            r[q] = alpha * ((1 / eta) * (A[q] @ mu_tilted - r_cav) - r[q]) # new shift
 
-    A, r = ep_iter()
-
-    sigma = np.linalg.pinv(np.sum(A, axis=0))
-    mu = sigma @ np.sum(r, axis=0)
+    sigma = np.linalg.pinv(np.sum(A_clone, axis=0))
+    mu = sigma @ np.sum(r_clone, axis=0)
     w_samples = np.random.multivariate_normal(mu, sigma, num_w_samples)
     return w_samples
 
@@ -273,6 +332,8 @@ def ep_l_dimension(traj_embeds, feedback_embeds, latent_dim, w_samples, num_l_sa
         cov /= np.linalg.norm(cov)
         l_samples = np.random.multivariate_normal(mu, cov, num_l_samples).reshape(num_l_samples, latent_dim)
         return l_samples
+
+    traj_embeds = traj_embeds[1:]
 
     def exponential_decay_damping(alpha_0, K, min_alpha):
         """
