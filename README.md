@@ -1,5 +1,5 @@
 # Active Reward Learning and Iterative Trajectory Improvement from Comparative Language Feedback (Journal Paper Under Review)
-**Authors:** [Eisuke Hirota^*](https://ei5uke.github.io/), [Zhaojing Yang^*](https://yang-zj1026.github.io), [Ayano Hiranaka](https://misoshiruseijin.github.io/), [Miru Jun](https://github.com/lemonlemonde), [Jeremy Tien](https://www.linkedin.com/in/jeremy-tien), [Stuart Russell](https://www.cs.berkeley.edu/~russell/), [Anca Dragan](https://people.eecs.berkeley.edu/~anca/), [Erdem Bıyık](https://ebiyik.github.io)
+**Authors:** [Eisuke Hirota*](https://ei5uke.github.io/), [Zhaojing Yang*](https://yang-zj1026.github.io), [Ayano Hiranaka](https://misoshiruseijin.github.io/), [Miru Jun](https://github.com/lemonlemonde), [Jeremy Tien](https://www.linkedin.com/in/jeremy-tien), [Stuart Russell](https://www.cs.berkeley.edu/~russell/), [Anca Dragan](https://people.eecs.berkeley.edu/~anca/), [Erdem Bıyık](https://ebiyik.github.io)
 
 # Set-Up
 First, let's create a virtual env using pyvenv or conda:
