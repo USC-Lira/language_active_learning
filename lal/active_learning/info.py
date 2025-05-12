@@ -1,5 +1,4 @@
 import torch
-torch.set_printoptions(precision=8)
 import numpy as np
 
 def info(w_samples, l_samples, traj_embeds, prev_idxs):
@@ -25,21 +24,22 @@ def info(w_samples, l_samples, traj_embeds, prev_idxs):
 	probs /= torch.sum(probs, dim=-1).unsqueeze(-1) # shape (T, M, M*K) # this step is here b/c the prob fxn is actually equal to the numerator divide by all possible language
 	tmp = M * probs / torch.sum(probs, dim=1).unsqueeze(1)
 	f_values = torch.sum(torch.sum(torch.log2(tmp), dim=2), dim=1) / (M*K) # shape (T)
+	f_values = torch.nan_to_num(f_values, nan=0, posinf=1, neginf=-1) # help prevent any nan issues
 	
-	# add noise
-	var = 1e-9
-	noise = torch.tensor(np.random.randn(len(f_values)) * var ** 0.5)
-	f_values += noise
+	# add noise if you'd like
+	# var = 0 # change here or the line under, constant noise
+	# var = abs(torch.mean(f_values).item())/10 # dynamic noise
+	# noise = torch.tensor(np.random.randn(len(f_values)) * var ** 0.5)
+	# f_values += noise
 
-	# argmax approach
-	idx = torch.argmax(f_values) # easy code uses argmin but also divides by negative M for some reason
+	idx = torch.argmax(f_values)
 
-	# noisy softmax approach
-	# tmp = 0.5
+	# noisy softmax approach # another option to increase diversity instead of adding gaussian noise
+	# tmp = 0.25
 	# f_values = torch.softmax(f_values / tmp, dim=0)
 	# idx = np.where(np.random.multinomial(1, f_values.numpy()) == 1)[0][0]
 	
-	ig = torch.abs(torch.nan_to_num(f_values[idx], nan=1))
+	ig = torch.abs(f_values[idx])
 
 	for i in prev_idxs:
 		if idx >= i: idx += 1
