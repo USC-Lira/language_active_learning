@@ -84,10 +84,6 @@ def get_lang_feedback_aspect(curr_feature, reward, optimal_traj_feature, noisy=F
         feature_idx: the index of the feature to give feedback on
         pos: whether the feedback is positive or negative
     """
-    # potential_pos = torch.tensor(reward * (optimal_traj_feature - curr_feature.numpy()))
-    # potential_neg = torch.tensor(reward * (curr_feature.numpy() - optimal_traj_feature))
-    # potential = torch.cat([potential_pos, potential_neg], dim=1)
-
     potential = torch.tensor(reward * (optimal_traj_feature - curr_feature.numpy()))
     potential = potential / temperature
     probs = torch.softmax(potential, dim=1)
@@ -126,7 +122,7 @@ def load_data(args, split='train', DEBUG=False):
     if DEBUG:
         print("len of trajs: " + str(len(trajs)))
 
-    # add extra data
+    ###### if you'd like to add extra data ######
     # if args.env == "metaworld":
     #     if split == "test":
     #         trajs_extra = np.load(f"{args.data_dir_extra}/{split}/trajs.npy")
@@ -147,19 +143,17 @@ def load_data(args, split='train', DEBUG=False):
     #     actions = np.concatenate((actions, actions_extra))
         # print(trajs.shape, traj_img_obs.shape, actions.shape)
 
-    # artificially increasing dataset from 134 trajs to 968 trajs
+    ###### instead, if you'd like to duplicate one of the trajectories ######
     # if args.dupe_traj >= 0 and split == "train":
-    # dupe_traj = 179
-    # if dupe_traj >= 0 and split == "train":
-    #     # dupe_traj = args.dupe_traj
+    #     dupe_traj = args.dupe_traj
     #     traj_134 = trajs[dupe_traj, :, :]
-    #     copies_traj = np.repeat(traj_134[np.newaxis, :, :], 50, axis=0)
+    #     copies_traj = np.repeat(traj_134[np.newaxis, :, :], 834, axis=0)
     #     trajs = np.concatenate((trajs, copies_traj), axis=0)
     #     traj_img_134 = traj_img_obs[dupe_traj, :, :]
-    #     copies_traj_img = np.repeat(traj_img_134[np.newaxis, :, :], 50, axis=0)
+    #     copies_traj_img = np.repeat(traj_img_134[np.newaxis, :, :], 834, axis=0)
     #     traj_img_obs = np.concatenate((traj_img_obs, copies_traj_img), axis=0)
     #     actions_134 = actions[dupe_traj, :, :]
-    #     copies_actions = np.repeat(actions_134[np.newaxis, :, :], 50, axis=0)
+    #     copies_actions = np.repeat(actions_134[np.newaxis, :, :], 834, axis=0)
     #     actions = np.concatenate((actions, copies_actions), axis=0)
 
     # need to run categorize.py first to get these files
@@ -228,61 +222,36 @@ def lang_pref_learning(
         learned_reward, test_traj_embeds, test_traj_true_rewards
     )
 
-    # print(f"Initial rewards: {optimal_learned_reward}, {optimal_true_reward}")
     optimal_learned_rewards.append(optimal_learned_reward)
     optimal_true_rewards.append(optimal_true_reward)
 
     # call next_traj_method fxn to get the iterator
-    init_reward = learned_reward.linear.weight[0].detach().clone()
-    init_reward /= torch.norm(init_reward)
-    iterator = next_traj_method(traj_embeds, lang_embeds, init_reward, args.active, args.reward, args.lang, args.seed)
+    iterator = next_traj_method(traj_embeds, lang_embeds, learned_reward, args.active, args.reward, args.lang, args.seed)
 
-    # for it, train_lang_data in enumerate(train_lang_dataloader):
     epsilon = 1e-10
     i = 0
     score = np.inf
-    # while score >= epsilon:
-    # laplace_mh_reward0_traj = [25, 21, 9, 47, 110, 65, 121, 109, 24, 133, 38, 96, 117, 103, 94, 23, 78, 84, 62, 92, 127, 42, 67, 33, 79, 83, 128, 29, 14, 99, 77, 106, 102, 116, 118, 120, 113, 90, 61, 112, 72, 6, 28, 12, 115, 45, 81, 132, 76, 17]
-    # laplace_mh_reward1_traj = [25, 57, 114, 34, 50, 121, 12, 55, 113, 68, 27, 28, 85, 24, 4, 132, 112, 51, 95, 77, 42, 127, 104, 123, 67, 102, 76, 29, 44, 107, 84, 14, 62, 89, 75, 87, 60, 78, 131, 116, 79, 2, 36, 9, 30, 92, 13, 8, 82, 125]
-    # laplace_mh_reward2_traj = [25, 57, 114, 34, 50, 121, 35, 93, 99, 84, 75, 82, 97, 118, 109, 65, 27, 95, 6, 127, 86, 96, 28, 133, 24, 77, 132, 92, 12, 9, 101, 78, 44, 98, 56, 130, 23, 89, 4, 94, 110, 45, 21, 69, 49, 108, 13, 64, 47, 17]
     traj_reward = 0
     num_queries = 50
     while i < num_queries:
-        # print(f"_____________")
-        # print(f"Iteration: {i}")
-        # sample w and l from the iterator
-        # get the best query idx and the score using info gain from the iterator
-        
-        start_time = time.time()
-        _, idx, score = iterator.next() # this takes up a lot of cpu percentage
-        # score = 100 # sanity check
-        # idx = laplace_mh_reward2_traj[i]
-        # print(f"Iterating took: {time.time() - start_time} seconds")
-        # score = 100 # sanity check
-        # idx = i # sanity check
-        # print(f"Score: {score}, Idx: {idx}")
+        _, idx, score = iterator.next()
         i += 1
 
         # reward weight sampling + info gain
         curr_traj_embed = traj_embeds[idx]
         curr_feature_value = torch.tensor(feature_values[idx]).unsqueeze(0).to(torch.float64)
 
-        # curr_traj_reward = torch.sum(torch.from_numpy(true_reward) * curr_feature_value.numpy())
-        # curr_traj_reward_sim = torch.sum(torch.tensor([1.0, 1.0, 1.0]) * curr_feature_value.numpy())
-        # traj_reward += curr_traj_reward
-        # traj_reward += curr_traj_reward_sim
-        # print(f"Curr traj reward: {curr_traj_reward.item()}")
-
-        # check if we must still use info gain or break
-        if score > epsilon:
+        if score > epsilon: # eventually remove this line
             # Use true reward func to get language feedback (select from set)
             # First find the feature aspect to give feedback on and positive / negative
+            if args.env == "robosuite": temp = 1.0
+            elif args.env == "metaworld": temp = 1.0
             feature_aspect_idx, pos = get_lang_feedback_aspect(
                 curr_feature_value,
                 true_reward,
                 optimal_traj_feature,
                 args.use_softmax,
-                temperature=1.0,
+                temperature=temp,
             )
             if pos: # this simulates a user's positive feedback
                 nlcomp = np.random.choice(greater_nlcomps[feature_aspects[feature_aspect_idx]])
@@ -358,7 +327,6 @@ def lang_pref_learning(
                 loss.backward()
                 optimizer.step()   
 
-            # print(f"Loss: {loss.item():.4f}, Norm of learned reward: {torch.norm(learned_reward.linear.weight):.4f}")
             learned_reward_norms.append(torch.norm(learned_reward.linear.weight).item())
             
             cross_entropy = evaluate(test_dataloader, test_traj_true_rewards, learned_reward, test_traj_embeds, device=device)
@@ -366,14 +334,11 @@ def lang_pref_learning(
             optimal_learned_reward, optimal_true_reward = get_optimal_traj(
                 learned_reward, test_traj_embeds, test_traj_true_rewards
             )
-            # print(f"Reward {i}: {optimal_learned_reward}, {optimal_true_reward}")
-            # print(f"Cross Entropy {i}: {cross_entropy}")
             optimal_learned_rewards.append(optimal_learned_reward)
             optimal_true_rewards.append(optimal_true_reward)
-
+            # if i == 10: print(cross_entropy)
     print(f"Final CE: {cross_entropy}")
-    print(f"Final Reward: {optimal_learned_reward}")
-    # print(f"Average Traj Reward: {traj_reward / num_queries}")
+    print(f"Final Reward: {optimal_learned_reward/optimal_true_reward}")
     return_dict = {
         "cross_entropy": eval_cross_entropies,
         "learned_reward_norms": learned_reward_norms,
@@ -485,14 +450,13 @@ def run(args):
         train_feature_values = train_feature_values[:, :3]
         test_feature_values = test_feature_values[:, :3]
 
-        # extra
+        #### if you are adding more data ####
         # train_feature_values_extra = np.load(f"{args.data_dir_extra}/train/feature_vals.npy")
         # test_feature_values_extra = np.load(f"{args.data_dir_extra}/test/feature_vals.npy")
         # train_feature_values_extra = np.mean(train_feature_values_extra, axis=-1)
         # test_feature_values_extra = np.mean(test_feature_values_extra, axis=-1)
         # train_feature_values_extra = train_feature_values_extra[:, :3]
         # test_feature_values_extra = test_feature_values_extra[:, :3]
-
         # train_feature_values = np.concatenate((train_feature_values, train_feature_values_extra))
         # test_feature_values = np.concatenate((test_feature_values, test_feature_values_extra))
 
@@ -506,74 +470,6 @@ def run(args):
 
     train_traj_true_rewards = np.dot(train_feature_values, true_reward)
     test_traj_true_rewards = np.dot(test_feature_values, true_reward)
-
-    # save more true reward seeds
-    # max_reward_idxs = np.argmax(train_traj_true_rewards)
-    # optimal_traj = train_feature_values[max_reward_idxs]
-    # np.save(args.true_reward_dir + "/feature_vals.npy", optimal_traj)
-    # print("Done")
-    # exit()
-
-    # # remove trajs that have too high of a feature
-    # if args.dupe_traj == -1 and args.env == "metaworld":
-    #     sim_reward = np.array([1.0, 1.0, 1.0])
-    #     sim_train_traj_true_rewards = np.dot(train_feature_values, sim_reward)
-    #     sim_test_traj_true_rewards = np.dot(test_feature_values, sim_reward)
-    #     # print(sim_train_traj_true_rewards)
-
-    #     # train_idxs = (np.linalg.norm(train_feature_values, axis=1) < args.max_feature_norm) & (np.linalg.norm(train_feature_values, axis=1) > args.min_feature_norm)
-    #     # train_idxs = train_traj_true_rewards < args.max_feature_norm
-    #     # train_idxs = (train_traj_true_rewards < args.max_feature_norm) & (train_traj_true_rewards > args.min_feature_norm)
-    #     # train_idxs = (sim_train_traj_true_rewards < args.min_feature_norm) ^ (sim_train_traj_true_rewards > args.max_feature_norm)
-    #     # train_idxs = np.concatenate(((sim_train_traj_true_rewards < args.min_feature_norm).nonzero()[0], np.random.choice((sim_train_traj_true_rewards > args.max_feature_norm).nonzero()[0], 50)))
-    #     # train_idxs = (sim_train_traj_true_rewards > args.min_feature_norm).nonzero()[0]
-    #     high = (sim_train_traj_true_rewards > 3.0).sum()
-    #     low = (sim_train_traj_true_rewards < -0.5).sum()
-    #     mid = ((sim_train_traj_true_rewards > -0.5) & (sim_train_traj_true_rewards < 3.0)).sum()
-    #     # print(high, mid, low)
-    #     high_idxs =  np.random.choice((sim_train_traj_true_rewards > 3.0).nonzero()[0], 0, replace=False) # 50, 67
-    #     # print(high_idxs[0])
-    #     low_idxs =  np.random.choice((sim_train_traj_true_rewards < -0.5).nonzero()[0], low, replace=False) # 60, 147, 
-    #     # mid_idxs = ((sim_train_traj_true_rewards > -0.5) & (sim_train_traj_true_rewards < 3.0)).nonzero()[0]
-    #     mid_idxs = np.random.choice(((sim_train_traj_true_rewards > -0.5) & (sim_train_traj_true_rewards < 3.0)).nonzero()[0], 0, replace=False) # 128, 71
-    #     train_idxs = np.concatenate((low_idxs, mid_idxs, high_idxs))
-    #     # train_idxs = np.concatenate((((sim_train_traj_true_rewards > args.min_feature_norm) & (sim_train_traj_true_rewards < args.max_feature_norm)).nonzero()[0], np.random.choice((sim_train_traj_true_rewards > args.max_feature_norm).nonzero()[0], 10)))
-    #     # train_idxs = train_traj_true_rewards > args.min_feature_norm
-    #     # print(train_idxs)
-    #     # print((~train_idxs).sum())
-    #     # print("before: ", train_trajs.shape)
-    #     train_trajs = train_trajs[train_idxs]
-    #     # print("after: ", train_trajs.shape)
-    #     train_feature_values = train_feature_values[train_idxs]
-    #     train_img_obs = train_img_obs[train_idxs]
-    #     train_actions = train_actions[train_idxs]
-
-    #     # test_idxs = (np.linalg.norm(test_feature_values, axis=1) < args.max_feature_norm) & (np.linalg.norm(test_feature_values, axis=1) > args.min_feature_norm)
-    #     # test_idxs = test_traj_true_rewards < args.max_feature_norm
-    #     # test_idxs = (test_traj_true_rewards < args.max_feature_norm) & (test_traj_true_rewards > args.min_feature_norm)
-    #     # test_idxs = (sim_test_traj_true_rewards < args.min_feature_norm) ^ (sim_test_traj_true_rewards > args.max_feature_norm)
-    #     # test_idxs = np.concatenate(((sim_test_traj_true_rewards < args.min_feature_norm).nonzero()[0], np.random.choice((sim_test_traj_true_rewards > args.max_feature_norm).nonzero()[0], 5)))
-    #     # test_idxs = (sim_test_traj_true_rewards > args.min_feature_norm).nonzero()[0]
-    #     # test_idxs = test_traj_true_rewards > args.min_feature_norm
-    #     test_idxs = (sim_test_traj_true_rewards > -100).nonzero()[0] # this is to include all trajs
-    #     # print(test_idxs)
-    #     # print((~test_idxs).sum())
-    #     test_trajs = test_trajs[test_idxs]
-    #     test_feature_values = test_feature_values[test_idxs]
-    #     test_img_obs = test_img_obs[test_idxs]
-    #     test_actions = test_actions[test_idxs]
-
-    #     # print(train_idxs.sum())
-    #     # print(train_idxs.sum(), test_idxs.sum())
-    #     # print(train_trajs.shape, test_trajs.shape)
-
-    # exit()
-
-    # # Initialize the dataset and dataloader
-    # train_lang_dataset = LangPrefDataset(train_trajs, train_feature_values)
-    # train_lang_data = DataLoader(train_lang_dataset, batch_size=1, shuffle=True)
-    # test_dataset = EvalDataset(test_trajs)
-    # test_data = DataLoader(test_dataset, batch_size=1, shuffle=False)
 
     # Current learned language encoder
     # Load the model
@@ -657,22 +553,7 @@ def run(args):
         traj_encoder_type=args.traj_encoder,
     )
 
-    # lots of trajs closest to mean, very few trajs far from it
-    # print(train_traj_embeds.shape) # (399, 512) 
-    if args.dupe_traj == -1 and args.env == "robosuite": # why is this uncommented?
-        closest_n = 150
-        farthest_n = 30
-        mean_train_traj_embeds = np.mean(train_traj_embeds, axis=0)
-        # mean_test_traj_embeds = np.mean(test_traj_embeds, axis=0) # don't change test dataset for now
-        closest_idcs = np.argsort(np.linalg.norm(train_traj_embeds - mean_train_traj_embeds, axis=1))[:closest_n]
-        farthest_idcs = np.argsort(-np.linalg.norm(train_traj_embeds - mean_train_traj_embeds, axis=1))[:farthest_n]
-        train_idxs = np.concatenate((closest_idcs, farthest_idcs))
-        # print(train_trajs.shape, train_feature_values.shape, train_img_obs.shape, train_actions.shape, train_traj_embeds.shape)
-        train_trajs = train_trajs[train_idxs]
-        train_feature_values = train_feature_values[train_idxs]
-        # train_img_obs = train_img_obs[train_idxs]
-        # train_actions = train_actions[train_idxs]
-        train_traj_embeds = train_traj_embeds[train_idxs]
+    # skewing the dataset if applicable
     if args.dupe_traj == -1 and args.env == "metaworld":
         closest_n = 90
         farthest_n = 10
@@ -710,29 +591,6 @@ def run(args):
     # train_traj_embeds /= 3
     # test_traj_embeds /= 3 # idk if we also need to make this thing also mean norm 1
 
-    # print("Mean Norm of Traj Embeds:", np.linalg.norm(train_traj_embeds, axis=1).mean())
-    # print("Mean Std of Traj Embeds:", np.std(train_traj_embeds))
-    # print("Mean Norm of Lang Embeds:", np.linalg.norm(train_lang_embeds, axis=1).mean())
-    # print("Mean Std of Lang Embeds:", np.std(train_lang_embeds))
-    # exit()
-    # # print("Mean Norm of Trajs:", np.linalg.norm(np.linalg.norm(train_trajs, axis=1), axis=1).mean())
-    # # print("Mean Norm of Test Traj Embeds:", np.linalg.norm(test_traj_embeds, axis=1).mean())
-    # # print("Mean Std of Test Traj Embeds:", np.std(test_traj_embeds))
-    # print("Norm of feature values:", np.linalg.norm(train_feature_values, axis=1).mean())
-    # print("Mean Std of Feature Values:", np.std(train_feature_values))
-    # print("Norm of test feature values:", np.linalg.norm(test_feature_values, axis=1).mean())
-    # print("Mean Std of Test Feature Values:", np.std(test_feature_values))
-
-    # kde_train = KernelDensity(kernel='gaussian', bandwidth=0.1).fit(train_feature_values)
-    # kde_test = KernelDensity(kernel='gaussian', bandwidth=0.1).fit(test_feature_values)
-    # log_density_train = kde_train.score_samples(test_feature_values)
-    # log_density_test = kde_test.score_samples(test_feature_values)
-    # p_train = np.exp(log_density_train)
-    # p_test = np.exp(log_density_test)
-    # kl_divergence = entropy(p_train, p_test)
-    # print("KLDiv: ", kl_divergence)
-    # exit()
-
     # Random init learned reward
     learned_reward = RewardFunc(feature_dim, 1)
     optimizer = torch.optim.SGD(learned_reward.parameters(), lr=args.lr, weight_decay=args.weight_decay)
@@ -744,8 +602,6 @@ def run(args):
             optimal_traj = np.load(f"{args.true_reward_dir}/traj.npy").reshape(500, 69)
             optimal_traj_feature = get_feature_value(optimal_traj)
         else:
-            # optimal_traj_feature = train_feature_values[np.argmax(train_traj_true_rewards)]
-            # optimal_traj_feature = test_feature_values[np.argmax(test_traj_true_rewards)]
             optimal_traj_feature = np.load(args.true_reward_dir + "/feature_vals.npy")
     elif args.env == "metaworld":
         if int(args.true_reward_dir[-1]) < 2:
@@ -789,27 +645,8 @@ def run(args):
         
     postfix_noisy = f"nn_active_{args.reward}_{args.lang}_lr_{args.lr}_dupe_traj_{args.dupe_traj}_num_iter_{args.num_iterations}"
     postfix_noisy += "_other_feedback_" + str(args.num_other_feedback) + "_seed_" + str(args.seed)
-    # postfix_noisy += f"_temp_{args.lang_temp}" + f"_lc_{args.lang_loss_coeff}" + f"_wd_{args.weight_decay}_noiselessargmax"
     postfix_noisy += f"_temp_{args.lang_temp}" + f"_lc_{args.lang_loss_coeff}" + f"_wd_{args.weight_decay}"
     save_results(args, noisy_results, test_ce=test_ce, postfix=postfix_noisy)
-
-    # fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(15, 5))
-    # ax1.plot(noisy_results["cross_entropy"], label="Noisy")
-    # ax1.plot([0, len(noisy_results["cross_entropy"])], [test_ce, test_ce], 'k--', label='Ground Truth')
-    # ax1.set_xlabel("Number of Queries")
-    # ax1.set_ylabel("Cross-Entropy")
-    # ax1.set_title("Feedback, True Dist: Softmax")
-    # ax1.legend()
-
-    # ax2.plot(noisy_results["optimal_learned_rewards"], label="Noisy, Learned Reward")
-    # ax2.plot(noisy_results["optimal_true_rewards"], label="True Reward", c="r")
-    # ax2.set_xlabel("Number of Queries")
-    # ax2.set_ylabel("Reward Value")
-    # ax2.set_title("True Reward of Optimal Trajectory")
-    # ax2.legend()
-
-    # plt.tight_layout()
-    # plt.savefig(f"{args.true_reward_dir}/pref_learning/nn_active_{args.reward}_{args.lang}_noisy_{args.seed}.png")
 
 if __name__ == "__main__":
     torch.set_num_threads(num_cpus)

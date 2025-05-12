@@ -12,6 +12,7 @@ import numpy as np
 import time
 import argparse
 import matplotlib.pyplot as plt
+import copy
 
 from transformers import AutoModel, AutoTokenizer, T5EncoderModel
 
@@ -36,13 +37,18 @@ def init_weights_with_norm_one(m):
     if isinstance(m, nn.Linear):  # Check if the module is a linear layer
         weight_shape = m.weight.size()
         # Initialize weights with a standard method
-        weights = torch.normal(mean=0, std=0.001, size=weight_shape)
+        weights = torch.normal(mean=0, std=0.1, size=weight_shape) # 0.1 for t5-base, 0.001 for t5-small
         # Normalize weights to have a norm of 1
         # weights /= weights.norm(2)  # Adjust this if you need a different norm
         m.weight.data = weights
         # You can also initialize biases here if needed
         if m.bias is not None:
             m.bias.data.fill_(0)
+
+def add_noise_to_weights(m):
+    with torch.no_grad():
+        if hasattr(m, 'weight'):
+            m.weight.add_(torch.randn(m.weight.size()) * 0.2)
 
 class RewardFunc(nn.Module):
     def __init__(self, input_dim, output_dim):
@@ -68,9 +74,6 @@ def get_lang_feedback_aspect(curr_feature, reward, optimal_traj_feature, noisy=F
         feature_idx: the index of the feature to give feedback on
         pos: whether the feedback is positive or negative
     """
-    # potential_pos = torch.tensor(reward * (optimal_traj_feature - curr_feature.numpy()))
-    # potential_neg = torch.tensor(reward * (curr_feature.numpy() - optimal_traj_feature))
-    # potential = torch.cat([potential_pos, potential_neg], dim=1)
     potential = torch.tensor(reward * (optimal_traj_feature - curr_feature))
     potential = potential / temperature
     probs = torch.softmax(potential, dim=0)
@@ -109,30 +112,30 @@ def load_data(args, split='train', DEBUG=False):
     if DEBUG:
         print("len of trajs: " + str(len(trajs)))
 
-    # add extra data
-    if args.env == "metaworld":
-        if split == "test":
-            trajs_extra = np.load(f"{args.data_dir_extra}/{split}/trajs.npy")
-            trajs_extra = trajs_extra[:, ::10, :]
-            # print(trajs.shape, trajs_extra.shape)
-            trajs = np.concatenate((trajs, trajs_extra))
+    ###### if you'd like to add extra data ######
+    # if args.env == "metaworld":
+    #     if split == "test":
+    #         trajs_extra = np.load(f"{args.data_dir_extra}/{split}/trajs.npy")
+    #         trajs_extra = trajs_extra[:, ::10, :]
+    #         # print(trajs.shape, trajs_extra.shape)
+    #         trajs = np.concatenate((trajs, trajs_extra))
 
-        traj_img_obs_extra = None
-        actions_extra = None
+    #     traj_img_obs_extra = None
+    #     actions_extra = None
 
-        if args.use_img_obs:
-            traj_img_obs_extra = np.load(f"{args.data_dir_extra}/{split}/traj_img_obs.npy")
-            actions_extra = np.load(f"{args.data_dir_extra}/{split}/actions.npy")
-            traj_img_obs_extra = traj_img_obs_extra[:, ::10, :]
-            actions_extra = actions_extra[:, ::10, :]
+    #     if args.use_img_obs:
+    #         traj_img_obs_extra = np.load(f"{args.data_dir_extra}/{split}/traj_img_obs.npy")
+    #         actions_extra = np.load(f"{args.data_dir_extra}/{split}/actions.npy")
+    #         traj_img_obs_extra = traj_img_obs_extra[:, ::10, :]
+    #         actions_extra = actions_extra[:, ::10, :]
 
-        traj_img_obs = np.concatenate((traj_img_obs, traj_img_obs_extra))
-        actions = np.concatenate((actions, actions_extra))
+    #     traj_img_obs = np.concatenate((traj_img_obs, traj_img_obs_extra))
+    #     actions = np.concatenate((actions, actions_extra))
         # print(trajs.shape, traj_img_obs.shape, actions.shape)
 
-    # artificially increasing dataset from 134 trajs to 968 trajs
-    # if split == "train":
-    #     dupe_traj = 133
+    ###### instead, if you'd like to duplicate one of the trajectories ######
+    # if args.dupe_traj >= 0 and split == "train":
+    #     dupe_traj = args.dupe_traj
     #     traj_134 = trajs[dupe_traj, :, :]
     #     copies_traj = np.repeat(traj_134[np.newaxis, :, :], 834, axis=0)
     #     trajs = np.concatenate((trajs, copies_traj), axis=0)
@@ -186,10 +189,12 @@ def next_query(models, traj_embeds, prev_idxs):
         idx (int): index of the chosen trajectory
     '''
     learned_rewards = []
+    noisy_models = copy.deepcopy(models)
     with torch.no_grad():
-        for model in models:
-            learned_rewards.append([model(traj_embed).detach().numpy() for traj_embed in traj_embeds])
-    learned_rewards = np.array(learned_rewards)
+        for noisy_model in noisy_models:
+            noisy_model.apply(add_noise_to_weights)
+            learned_rewards.append([noisy_model(traj_embed).detach().numpy() for traj_embed in traj_embeds])
+    learned_rewards = np.array(learned_rewards).reshape(len(models), -1)
     std = np.std(learned_rewards, axis=0)
     std[prev_idxs] = -np.inf
     idx = np.argmax(std)
@@ -240,13 +245,9 @@ def qbc_learning(
     i = 0
     prev_idxs = []
     while i < 50:
-        # print(f"_____________")
-        # print(f"Iteration: {i}")
         start_time = time.time()
         idx = next_query(models, traj_embeds, prev_idxs)
         prev_idxs.append(idx)
-        # print(f"Iterating took: {time.time() - start_time} seconds")
-        # print(f"Idx: {idx}")
         i += 1
 
         curr_traj_embed = traj_embeds[idx]
@@ -254,12 +255,14 @@ def qbc_learning(
 
         # Use true reward func to get language feedback (select from set)
         # First find the feature aspect to give feedback on and positive / negative
+        if args.env == "robosuite": temp = 1.0
+        elif args.env == "metaworld": temp = 1.0
         feature_aspect_idx, pos = get_lang_feedback_aspect(
             curr_feature_value,
             true_reward,
             optimal_traj_feature,
             args.use_softmax,
-            temperature=1.0,
+            temperature=temp,
         )
 
         if pos:
@@ -336,7 +339,6 @@ def qbc_learning(
         for model in models:
             average_norm += torch.norm(model.linear.weight)
         average_norm /= args.num_models
-        # print(f"Average Loss: {total_loss.item() / args.num_models:.4f}, Average Norm of learned reward: {average_norm.item():.4f}")
         learned_reward_norms.append(average_norm.item())
 
         # Evaluation
@@ -345,12 +347,12 @@ def qbc_learning(
         optimal_learned_reward, optimal_true_reward = get_optimal_traj(
             models, test_traj_embeds, test_traj_true_rewards
         )
-        # print(f"Reward {i}: {optimal_learned_reward}, {optimal_true_reward}")
-        # print(f"Cross Entropy {i}: {cross_entropy}")
+        # if i == 10: print(f"11th CE: {cross_entropy}, reward {optimal_learned_reward}")
         optimal_learned_rewards.append(optimal_learned_reward)
         optimal_true_rewards.append(optimal_true_reward)
 
     print(f"Final CE: {cross_entropy}")
+    print(f"Final Reward: {optimal_learned_reward/optimal_true_reward}")
     return_dict = {
         "cross_entropy": eval_cross_entropies,
         "learned_reward_norms": learned_reward_norms,
@@ -393,10 +395,19 @@ def evaluate(test_dataloader, true_traj_rewards, models, traj_embeds, test=False
         else:
             traj_a_embed = torch.tensor(traj_a_embed)
             traj_b_embed = torch.tensor(traj_b_embed)
+
+           # get each softmax, then average the softmax -> more conservative
             learned_probs = 0
             for model in models:
                 learned_probs += torch.softmax(torch.tensor([model(traj_a_embed), model(traj_b_embed)]), dim=0)
             learned_probs /= len(models)
+
+            # average the output, then softmax the average -> more aggressive
+            # learned_probs = 0
+            # for model in models:
+            #     learned_probs += torch.tensor([model(traj_a_embed), model(traj_b_embed)])
+            # learned_probs /= len(models)
+            # learned_probs = torch.softmax(learned_probs, dim=0)
 
         # calculate cross-entropy between learned and true distributions
         cross_entropy = bce_loss(learned_probs, true_probs)
@@ -462,16 +473,15 @@ def run(args):
         train_feature_values = train_feature_values[:, :3]
         test_feature_values = test_feature_values[:, :3]
 
-        # extra
-        train_feature_values_extra = np.load(f"{args.data_dir_extra}/train/feature_vals.npy")
-        test_feature_values_extra = np.load(f"{args.data_dir_extra}/test/feature_vals.npy")
-        train_feature_values_extra = np.mean(train_feature_values_extra, axis=-1)
-        test_feature_values_extra = np.mean(test_feature_values_extra, axis=-1)
-        train_feature_values_extra = train_feature_values_extra[:, :3]
-        test_feature_values_extra = test_feature_values_extra[:, :3]
-
-        train_feature_values = np.concatenate((train_feature_values, train_feature_values_extra))
-        test_feature_values = np.concatenate((test_feature_values, test_feature_values_extra))
+        #### if you are adding more data ####
+        # train_feature_values_extra = np.load(f"{args.data_dir_extra}/train/feature_vals.npy")
+        # test_feature_values_extra = np.load(f"{args.data_dir_extra}/test/feature_vals.npy")
+        # train_feature_values_extra = np.mean(train_feature_values_extra, axis=-1)
+        # test_feature_values_extra = np.mean(test_feature_values_extra, axis=-1)
+        # train_feature_values_extra = train_feature_values_extra[:, :3]
+        # test_feature_values_extra = test_feature_values_extra[:, :3]
+        # train_feature_values = np.concatenate((train_feature_values, train_feature_values_extra))
+        # test_feature_values = np.concatenate((test_feature_values, test_feature_values_extra))
 
     all_features = np.concatenate([train_feature_values, test_feature_values], axis=0)
     feature_value_means = np.mean(all_features, axis=0)
@@ -578,21 +588,21 @@ def run(args):
         traj_encoder_type=args.traj_encoder,
     )
 
-    # lots of trajs closest to mean, very few trajs far from it
+    # skewing the dataset if applicable
     if args.dupe_traj == -1 and args.env == "metaworld":
-        closest_n = 150
-        farthest_n = 30
+        closest_n = 90
+        farthest_n = 10
         mean_train_traj_embeds = np.mean(train_traj_embeds, axis=0)
-        # mean_test_traj_embeds = np.mean(test_traj_embeds, axis=0) # don't change test dataset for now
+
         closest_idcs = np.argsort(np.linalg.norm(train_traj_embeds - mean_train_traj_embeds, axis=1))[:closest_n]
         farthest_idcs = np.argsort(-np.linalg.norm(train_traj_embeds - mean_train_traj_embeds, axis=1))[:farthest_n]
         train_idxs = np.concatenate((closest_idcs, farthest_idcs))
-        # print(train_trajs.shape, train_feature_values.shape, train_img_obs.shape, train_actions.shape, train_traj_embeds.shape)
         train_trajs = train_trajs[train_idxs]
         train_feature_values = train_feature_values[train_idxs]
-        train_img_obs = train_img_obs[train_idxs]
-        train_actions = train_actions[train_idxs]
         train_traj_embeds = train_traj_embeds[train_idxs]
+        if args.use_img_obs:
+            train_img_obs = train_img_obs[train_idxs] 
+            train_actions = train_actions[train_idxs]
 
     # Initialize the dataset and dataloader
     train_lang_dataset = LangPrefDataset(train_trajs, train_feature_values)
@@ -612,25 +622,25 @@ def run(args):
     #     test_traj_embeds = np.load(f"{args.data_dir}/test/traj_embeds.npy")
     #     test_lang_embeds = np.load(f"{args.data_dir}/test/lang_embeds.npy")
 
-    # print("Mean Norm of Traj Embeds:", np.linalg.norm(train_traj_embeds, axis=1).mean())
-    # print("Mean Norm of Lang Embeds:", np.linalg.norm(train_lang_embeds, axis=1).mean())
-    # print("Norm of feature values:", np.linalg.norm(train_feature_values, axis=1).mean())
+    def generate_learning_rates(center_value, num_values, scale=10):
+        lower_bound = center_value / scale
+        upper_bound = center_value * scale
+        learning_rates = np.logspace(np.log10(lower_bound), np.log10(upper_bound), num=num_values)
+        return learning_rates
 
     # Random init learned reward
     models = [RewardFunc(feature_dim, 1) for _ in range(args.num_models)]
-    optimizers = [torch.optim.SGD(models[i].parameters(), lr=args.lr, weight_decay=args.weight_decay) for i in range(args.num_models)]
+    lrs = generate_learning_rates(args.lr, args.num_models)
+    optimizers = [torch.optim.SGD(models[i].parameters(), lr=lrs[i], weight_decay=args.weight_decay) for i in range(args.num_models)]
     test_ce = evaluate(test_data, test_traj_true_rewards, models, test_traj_embeds, test=True)
-    print(f"GT Cross Entropy: {test_ce}")
 
     # Load optimal trajectory given the true reward
     if args.env == "robosuite":
-        if int(args.true_reward_dir[-1]) < 2:
+        if int(args.true_reward_dir[-1]) <= 2:
             optimal_traj = np.load(f"{args.true_reward_dir}/traj.npy").reshape(500, 69)
             optimal_traj_feature = get_feature_value(optimal_traj)
         else:
-            optimal_traj_feature = train_feature_values[np.argmax(train_traj_true_rewards)]
-
-        # optimal_traj_feature = test_feature_values[np.argmax(test_traj_true_rewards)]
+            optimal_traj_feature = np.load(args.true_reward_dir + "/feature_vals.npy")
     elif args.env == "metaworld":
         if int(args.true_reward_dir[-1]) < 2:
             optimal_traj_feature = np.load(args.true_reward_dir + "/traj_vals.npy")
@@ -648,7 +658,8 @@ def run(args):
 
     print("_____________")
     print("QbC")
-    print(f"seed={args.true_reward_dir[-1]}")
+    print(f"lr={args.lr}, reward={args.true_reward_dir[-1]}, seed={args.seed}")
+    print(f"GT Cross Entropy: {test_ce}")
     noisy_results = qbc_learning(
         args,
         test_data,
@@ -669,28 +680,10 @@ def run(args):
         device,
     )
 
-    postfix_noisy = f"qbc_lr_{args.lr}_num_models_{args.num_models}"
+    postfix_noisy = f"qbc_lr_{args.lr}_num_models_{args.num_models}_num_iter_{args.num_iterations}"
     postfix_noisy += "_other_feedback_" + str(args.num_other_feedback) + "_seed_" + str(args.seed)
-    postfix_noisy += f"_temp_{args.lang_temp}" + f"_lc_{args.lang_loss_coeff}"
+    postfix_noisy += f"_temp_{args.lang_temp}" + f"_lc_{args.lang_loss_coeff}" + f"_wd_{args.weight_decay}"
     save_results(args, noisy_results, postfix=postfix_noisy)
-    
-    # fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(15, 5))
-    # ax1.plot(noisy_results["cross_entropy"], label="Noisy")
-    # ax1.plot([0, len(noisy_results["cross_entropy"])], [test_ce, test_ce], 'k--', label='Ground Truth')
-    # ax1.set_xlabel("Number of Queries")
-    # ax1.set_ylabel("Cross-Entropy")
-    # ax1.set_title("Feedback, True Dist: Softmax")
-    # ax1.legend()
-
-    # ax2.plot(noisy_results["optimal_learned_rewards"], label="Noisy, Learned Reward")
-    # ax2.plot(noisy_results["optimal_true_rewards"], label="True Reward", c="r")
-    # ax2.set_xlabel("Number of Queries")
-    # ax2.set_ylabel("Reward Value")
-    # ax2.set_title("True Reward of Optimal Trajectory")
-    # ax2.legend()
-
-    # plt.tight_layout()
-    # plt.savefig(f"{args.true_reward_dir}/pref_learning/qbc_pref_{args.seed}.png")
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="")
